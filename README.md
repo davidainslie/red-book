@@ -9,7 +9,3 @@ Scala module following the Red Book.
 - [SBT](docs/sbt.md)
 
 - [Release](docs/release.md)
-
-- Chapters
-
-  -

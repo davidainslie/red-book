@@ -44,7 +44,7 @@ object Dependencies {
   )
 
   lazy val simulacrum: Seq[ModuleID] = Seq(
-    "com.github.mpilquist" %% "simulacrum" % "0.19.0" withSources() withJavadoc()
+    "org.typelevel" %% "simulacrum" % "1.0.0" withSources() withJavadoc()
   )
   
   lazy val refined: Seq[ModuleID] = {

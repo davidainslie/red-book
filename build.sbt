@@ -25,7 +25,18 @@ def project(id: String, base: File): Project =
       addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.11.0" cross CrossVersion.full),
       addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1"),
       libraryDependencies ++= dependencies,
-      scalacOptions += "-Ymacro-annotations",
+      scalacOptions ++= Seq(
+        "-encoding", "utf8",
+        "-deprecation",
+        "-unchecked",
+        "-language:implicitConversions",
+        "-language:higherKinds",
+        "-language:existentials",
+        "-language:postfixOps",
+        "-Ymacro-annotations",
+        "-Ywarn-value-discard",
+        "-Xfatal-warnings"
+      ),
       fork := true,
       publishArtifact in Test := true
     )
