@@ -1,9 +1,10 @@
 package com.backwards.chap3
 
 import scala.annotation.tailrec
-import cats.Monoid
+import cats.{Monoid, Semigroup}
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import cats.syntax.semigroup._
 
 class Chap3Spec extends AnyWordSpec with Matchers {
   /**
@@ -180,6 +181,38 @@ class Chap3Spec extends AnyWordSpec with Matchers {
 
     def concat[A](xs: List[List[A]]): List[A] =
       foldLeftUsingFoldRight(xs, Nil: List[A])(append)
+
+    def map[A, B](xs: List[A])(f: A => B): List[B] =
+      foldLeft(xs, Nil: List[B])((acc, x) => append(acc, List(f(x))))
+
+    def filter[A](xs: List[A])(f: A => Boolean): List[A] =
+      foldLeft(xs, Nil: List[A])((acc, x) => append(acc, if (f(x)) List(x) else Nil: List[A]))
+
+    def filterUsingFlatMap[A](xs: List[A])(f: A => Boolean): List[A] =
+      flatMap(xs)(x => if (f(x)) List(x) else Nil)
+
+    def flatMap[A, B](xs: List[A])(f: A => List[B]): List[B] =
+      concat(map(xs)(f)) // foldLeft(xs, Nil: List[B])((acc, x) => append(acc, f(x)))
+
+    def addPairWise[A: Semigroup](xs: List[A], ys: List[A]): List[A] = {
+      @tailrec
+      def go(acc: List[A], xs: List[A], ys: List[A]): List[A] = (xs, ys) match {
+        case (Cons(x, xRest), Cons(y, yRest)) => go(append(acc, List(x |+| y)), xRest, yRest)
+        case _ => acc
+      }
+
+      go(Nil, xs, ys)
+    }
+
+    def zipWith[A, B, C](xs: List[A], ys: List[B])(f: (A, B) => C): List[C] = {
+      @tailrec
+      def go(acc: List[C], xs: List[A], ys: List[B]): List[C] = (xs, ys) match {
+        case (Cons(x, xRest), Cons(y, yRest)) => go(append(acc, List(f(x, y))), xRest, yRest)
+        case _ => acc
+      }
+
+      go(Nil, xs, ys)
+    }
   }
 
   "3.1 What will be the result of the following match expression?" in {
@@ -340,8 +373,73 @@ class Chap3Spec extends AnyWordSpec with Matchers {
     concat(xs) mustBe List(1, 2, 3, 4, 5, 6)
   }
 
-  "3.16" in {
+  "3.16 map" in {
+    import List._
 
+    val xs = List(1, 2, 3, 4, 5)
+
+    map(xs)(_ + 1) mustBe List(2, 3, 4, 5, 6)
+  }
+
+  "3.17 map doubles to strings" in {
+    import List._
+
+    val xs = List(1.1, 2.1, 3.1, 4.1, 5.1)
+
+    map(xs)(_.toString) mustBe List("1.1", "2.1", "3.1", "4.1", "5.1")
+  }
+
+  "3.18 map" in {
+    // See 3.16
+  }
+
+  "3.19 filter" in {
+    import List._
+
+    val xs = List(1, 2, 3, 4, 5)
+
+    val odd: Int => Boolean =
+      _ % 2 != 0
+
+    filter(xs)(odd) mustBe List(1, 3, 5)
+  }
+
+  "3.20 flatMap" in {
+    import List._
+
+    val xs = List(1, 2, 3, 4, 5)
+
+    flatMap(xs)(x => List(x, x)) mustBe List(1, 1, 2, 2, 3, 3, 4, 4, 5, 5)
+  }
+
+  "3.21 filter using flatMap" in {
+    import List._
+
+    val xs = List(1, 2, 3, 4, 5)
+
+    val odd: Int => Boolean =
+      _ % 2 != 0
+
+    filterUsingFlatMap(xs)(odd) mustBe List(1, 3, 5)
+  }
+
+  "3.22 Add two lists" in {
+    import cats.instances.int._
+    import List._
+
+    val xs = List(1, 2, 3)
+    val ys = List(4, 5, 6)
+
+    addPairWise(xs, ys) mustBe List(5, 7, 9)
+  }
+
+  "3.23 zipWith" in {
+    import List._
+
+    val xs = List(1, 2, 3)
+    val ys = List("4", "5", "6")
+
+    zipWith(xs, ys)(_ -> _) mustBe List(1 -> "4", 2 -> "5", 3 -> "6")
   }
 
   "3.24" in {
