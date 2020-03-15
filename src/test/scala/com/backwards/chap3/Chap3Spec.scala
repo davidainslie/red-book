@@ -7,8 +7,6 @@ import org.scalatest.wordspec.AnyWordSpec
 import cats.syntax.semigroup._
 
 class Chap3Spec extends AnyWordSpec with Matchers {
-
-
   "List" should {
     /**
      * `List` data type, parameterized on a type, `A`.
@@ -483,6 +481,61 @@ class Chap3Spec extends AnyWordSpec with Matchers {
         case Leaf(_) => 1
         case Branch(l, r) => 1 + size(l) + size(r)
       }
+
+      def maximum[A: Numeric](tree: Tree[A]): A = tree match {
+        case Leaf(a) => a
+        case Branch(l, r) => Numeric[A].max(maximum(l), maximum(r))
+      }
+
+      def depth[A](tree: Tree[A]): Int = tree match {
+        case Leaf(_) => 0
+        case Branch(l, r) => 1 + (depth(l) max depth(r))
+      }
+
+      def map[A, B](tree: Tree[A])(f: A => B): Tree[B] = tree match {
+        case Leaf(a) => Leaf(f(a))
+        case Branch(l, r) => Branch(map(l)(f), map(r)(f))
+      }
+
+      /**
+       * Like `foldRight` for lists, `fold` receives a "handler" for each of the data constructors of the type,
+       * and recursively accumulates some value using these handlers.
+       * As with `foldRight`, `fold(t)(Leaf(_))(Branch(_,_)) == t`, and we can use
+       * this function to implement just about any recursive function that would otherwise be defined by pattern matching.
+       */
+      def fold[A, B](tree: Tree[A])(f: A => B)(g: (B, B) => B): B = tree match {
+        case Leaf(a) => f(a)
+        case Branch(l, r) => g(fold(l)(f)(g), fold(r)(f)(g))
+      }
+
+      def sizeUsingFold[A](tree: Tree[A]): Int =
+        fold(tree)(_ => 1)(1 + _ + _)
+
+      def maximumUsingFold[A: Numeric](tree: Tree[A]): A =
+        fold(tree)(identity)(Numeric[A].max)
+
+      def depthUsingFold[A](tree: Tree[A]): Int =
+        fold(tree)(_ => 0)(1 + _ + _)
+
+      /**
+       * Note the type annotation required on the expression `Leaf(f(a))`
+       * Without this annotation, we get an error like this:
+       * type mismatch;
+       *    found   : Branch[B]
+       *    required: Leaf[B]
+       *    fold(t)(a => Leaf(f(a)))(Branch(_, _))
+       *
+       * This error is an unfortunate consequence of Scala using subtyping to encode algebraic data types.
+       * Without the annotation, the result type of the fold gets inferred as `Leaf[B]` and
+       * it is then expected that the second argument to `fold` will return `Leaf[B]`, which it doesn't (it returns `Branch[B]`).
+       * Really, we'd prefer Scala to infer `Tree[B]` as the result type in both cases.
+       * When working with algebraic data types in Scala, it's somewhat common to define helper functions
+       * that simply call the corresponding data constructors but give the less specific result type:
+       * def leaf[A](a: A): Tree[A] = Leaf(a)
+       * def branch[A](l: Tree[A], r: Tree[A]): Tree[A] = Branch(l, r)
+       */
+      def mapUsingFold[A, B](tree: Tree[A])(f: A => B): Tree[B] =
+        fold(tree)(a => Leaf(f(a)): Tree[B])(Branch(_, _))
     }
 
     /**
@@ -497,11 +550,33 @@ class Chap3Spec extends AnyWordSpec with Matchers {
     }
 
     "3.26 maximum" in {
+      import Tree._
 
+      maximum(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2))) mustBe 5
     }
 
-    "3.29" in {
+    "3.27 depth - the maximum path length from root to any leaf" in {
+      import Tree._
 
+      depth(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2))) mustBe 2
+    }
+
+    "3.28 map" in {
+      import Tree._
+
+      map(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2)))(_ * 2) mustBe (Branch(Branch(Leaf(2), Leaf(10)), Leaf(4)))
+    }
+
+    "3.29 fold - Generalize size, maximum, depth, and map" in {
+      import Tree._
+
+      sizeUsingFold(Branch(Branch(Leaf("a"), Leaf("b")), Leaf("c"))) mustBe 5
+
+      maximumUsingFold(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2))) mustBe 5
+
+      depthUsingFold(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2))) mustBe 2
+
+      mapUsingFold(Branch(Branch(Leaf(1), Leaf(5)), Leaf(2)))(_ * 2) mustBe (Branch(Branch(Leaf(2), Leaf(10)), Leaf(4)))
     }
   }
 }
