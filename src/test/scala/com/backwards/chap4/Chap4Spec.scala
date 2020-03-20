@@ -104,7 +104,37 @@ class Chap4Spec extends AnyWordSpec with Matchers {
       def sequenceAlternative[A](as: List[Option[A]]): Option[List[A]] =
         as.foldRight[Option[List[A]]](Some(Nil))((x, y) => map2(x, y)(_ :: _))
 
-      def traverse[A, B](a: List[A])(f: A => Option[B]): Option[List[B]]
+      def sequenceUsingTraverse[A](as: List[Option[A]]): Option[List[A]] =
+        traverse(as)(identity)
+
+      def traverse[A, B](as: List[A])(f: A => Option[B]): Option[List[B]] = {
+        @tailrec
+        def traverse(as: List[A], acc: List[B]): Option[List[B]] = as match {
+          case Nil =>
+            if (acc == Nil) None else Some(acc)
+
+          case a +: rest =>
+            f(a) match {
+              case Some(a) => traverse(rest, acc :+ a)
+              case _ => if (acc == Nil) None else Some(acc)
+            }
+
+          case _ =>
+            None
+        }
+
+        traverse(as, Nil)
+      }
+
+      def traverseAlternative[A, B](as: List[A])(f: A => Option[B]): Option[List[B]] =
+        as match {
+          case Nil => Some(Nil)
+          case h :: t => map2(f(h), traverseAlternative(t)(f))(_ :: _)
+        }
+
+      def traverseAlternativeAlternative[A, B](as: List[A])(f: A => Option[B]): Option[List[B]] =
+        as.foldRight[Option[List[B]]](Some(Nil))((h, t) => map2(f(h), t)(_ :: _))
+
     }
 
     "4.1 map" in {
@@ -199,6 +229,84 @@ class Chap4Spec extends AnyWordSpec with Matchers {
       // Wanting to sequence the results of a map this way is a common enough occurrence to warrant a new generic function, traverse:
 
       traverse(List("1", "5", "10"))(s => Option(s.toInt)) mustBe Some(List(1, 5, 10))
+    }
+  }
+
+  "Either" should {
+    object Either {
+      sealed trait Either[+E, +A] {
+        def map[B](f: A => B): E Either B =
+          flatMap(a => Right(f(a)))
+
+        def flatMap[EE >: E, B](f: A => EE Either B): EE Either B = this match {
+          case l @ Left(_) => l
+          case Right(a) => f(a)
+        }
+
+        def orElse[EE >: E, B >: A](b: => EE Either B): EE Either B = this match {
+          case r @ Right(_) => r
+          case _ => b
+        }
+
+        def map2[EE >: E, B, C](b: EE Either B)(f: (A, B) => C): EE Either C = {
+          flatMap(a => b.map(b => f(a, b)))
+        }
+      }
+
+      case class Left[+E](value: E) extends (E Either Nothing)
+
+      case class Right[+A](value: A) extends (Nothing Either A)
+
+      def apply[A](a: => A): Exception Either A =
+        try {
+          Right(a)
+        } catch { case e: Exception =>
+          Left(e)
+        }
+    }
+
+    "4.6a - map" in {
+      import Either._
+
+      Right("ye").map(_.toUpperCase) mustBe Right("YE")
+
+      val left = Left(new Exception("Left")): Exception Either String
+
+      left.map(_.toUpperCase) mustBe left
+    }
+
+    "4.6b - flatMap" in {
+      import Either._
+
+      Right("ye").flatMap(s => Either(s.toUpperCase)) mustBe Right("YE")
+
+      val left = Left(new Exception("Left")): Exception Either String
+
+      left.flatMap(s => Either(s.toUpperCase)) mustBe left
+    }
+
+    "4.6c - orElse" in {
+      import Either._
+
+      Right("ye").orElse(Right("right")) mustBe Right("ye")
+
+      val left = Left(new Exception("Left")): Exception Either String
+
+      left.orElse(Right("right")) mustBe Right("right")
+    }
+
+    "4.6d - map2" in {
+      import Either._
+
+      Right("ye").map2(Right("no"))(_ + _) mustBe Right("yeno")
+
+      val left = Left(new Exception("Left")): Exception Either String
+
+      Right("ye").map2(left)(_ + _) mustBe left
+
+      left.map2(Right("no"))(_ + _) mustBe left
+
+      left.map2(left)(_ + _) mustBe left
     }
   }
 }
