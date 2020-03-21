@@ -1,7 +1,7 @@
 package com.backwards.chap4
 
 import scala.annotation.tailrec
-import scala.{Either => _}
+import scala.{Either => _} // Hide std library `Either` since we are writing our own
 import cats.implicits._
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -53,7 +53,7 @@ class Chap4EitherSpec extends AnyWordSpec with Matchers {
       } mustBe left
     }
 
-    "4.8a demo" in {
+    "demo" in {
       case class Person(name: Name, age: Age)
 
       sealed class Name(val value: String)
@@ -77,10 +77,6 @@ class Chap4EitherSpec extends AnyWordSpec with Matchers {
 
       val Left(error) = mkPerson("", -1)
       error mustBe "Name is empty."
-    }
-
-    "4.8b" in {
-      // TODO
     }
   }
 }
