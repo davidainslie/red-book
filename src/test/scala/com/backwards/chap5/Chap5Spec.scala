@@ -111,6 +111,111 @@ class Chap5Spec extends AnyWordSpec with Matchers {
       stream.flatMap(i => Stream(i + 10)).toList mustBe List(11, 12, 13, 14, 15)
       Stream[Int]().flatMap(i => Stream(i + 10)) mustBe Empty
     }
+
+    "infinite stream" in {
+      lazy val ones: Stream[Int] = cons(1, ones)
+
+      ones.take(5).toList mustBe List(1, 1, 1, 1, 1)
+
+      ones.map(_ + 1).exists(_ % 2 == 0) mustBe true
+
+      ones.takeWhile(_ == 1) mustBe a [Stream[_]]
+
+      // ones.forAll(_ != 1) Results in infinite recursion causing a stack overflow
+    }
+
+    "5.8 generalize ones to the function constant, which returns an infinite Stream of a given value" in {
+      lazy val ones: Stream[Int] = constant(1)
+
+      ones.take(5).toList mustBe List(1, 1, 1, 1, 1)
+    }
+
+    "5.9 function that generates an infinite stream of integers, starting from n, then n + 1, n + 2, and so on" in {
+      lazy val ascending: Stream[Int] = from(5)
+
+      ascending.take(5).toList mustBe List(5, 6, 7, 8, 9)
+    }
+
+    "5.10 function fibs that generates the infinite stream of Fibonacci numbers: 0, 1, 1, 2, 3, 5, 8, and so on" in {
+      fibs.take(7).toList mustBe List(0, 1, 1, 2, 3, 5, 8)
+    }
+
+    "5.11 unfold - a more general stream-building function that takes an initial state, and a function for producing both the next state and the next value in the generated stream" in {
+      unfold[String, Int](5)(_ => None) mustBe Empty
+
+      unfold[String, Int](5)(state => Option((s"ye-$state", state + 1))).take(3).toList mustBe List("ye-5", "ye-6", "ye-7")
+    }
+
+    "5.12a ones using unfold" in {
+      ones.take(5).toList mustBe List(1, 1, 1, 1, 1)
+    }
+
+    "5.12b constant using unfold" in {
+      constantUsingUnfold(4).take(3).toList mustBe List(4, 4, 4)
+    }
+
+    "5.12c from using unfold" in {
+      fromUsingUnfold(10).take(5).toList mustBe List(10, 11, 12, 13, 14)
+    }
+
+    "5.12d fibs using unfold" in {
+      fibsUsingUnfold.take(7).toList mustBe List(0, 1, 1, 2, 3, 5, 8)
+    }
+
+    "5.13a map using unfold" in {
+      val stream: Stream[Int] = Stream(1, 2, 3, 4, 5)
+
+      stream.mapUsingUnfold(_ + 10).toList mustBe List(11, 12, 13, 14, 15)
+      Stream[Int]().mapUsingUnfold(_ + 10) mustBe Empty
+    }
+
+    "5.13b take using unfold" in {
+      val stream: Stream[Int] = Stream(1, 2, 3, 4, 5)
+
+      stream.takeUsinUnfold(3).toList mustBe List(1, 2, 3)
+      stream.takeUsinUnfold(10).toList mustBe stream.toList
+      stream.takeUsinUnfold(0) mustBe Empty
+      Stream().takeUsinUnfold(10) mustBe Empty
+    }
+
+    "5.13c takeWhile using unfold" in {
+      val stream: Stream[Int] = Stream(1, 2, 3, 4, 5)
+
+      stream.takeWhileUsingUnfold(_ < 4).toList mustBe List(1, 2, 3)
+      stream.takeWhileUsingUnfold(_ > 10) mustBe Empty
+    }
+
+    "5.13d zipWith using unfold" in {
+      val stream1: Stream[Int] = Stream(1, 2, 3)
+      val stream2: Stream[String] = Stream("4", "5", "6")
+
+      stream1.zipWith(stream2)(_ -> _).toList mustBe List(1 -> "4", 2 -> "5", 3 -> "6")
+
+      stream1.drop(1).zipWith(stream2)(_ -> _).toList mustBe List(2 -> "4", 3 -> "5")
+    }
+
+    """5.13e zipAll using unfold
+      The zipAll function should continue the traversal as long as either stream has more elements—it uses Option to indicate whether each stream has been exhausted.
+    """ in {
+      val stream1: Stream[Int] = Stream(1, 2, 3)
+      val stream2: Stream[String] = Stream("4", "5", "6")
+
+      stream1.zipAll(stream2).toList mustBe List(Option(1) -> Option("4"), Option(2) -> Option("5"), Option(3) -> Option("6"))
+
+      stream1.drop(3).zipAll(stream2).toList mustBe List(None -> Option("4"), None -> Option("5"), None -> Option("6"))
+    }
+
+    "5.14" in {
+
+    }
+
+    "5.15" in {
+
+    }
+
+    "5.16" in {
+
+    }
   }
 }
 
@@ -145,6 +250,15 @@ sealed trait Stream[+A] {
     case _ => empty
   }
 
+  def takeUsinUnfold(n: Int): Stream[A] =
+    unfold((this, n)) {
+      case (Cons(h, t), n) if n > 0 =>
+        Option(h(), (t(), n - 1))
+
+      case _ =>
+        None
+    }
+
   def takeWhile(p: A => Boolean): Stream[A] = this match {
     case Empty =>
       empty
@@ -166,6 +280,18 @@ sealed trait Stream[+A] {
         else empty
       }
   }
+
+  def takeWhileUsingUnfold(p: A => Boolean): Stream[A] =
+    unfold(this) {
+      case Empty =>
+        None
+
+      case Cons(h, t) =>
+        val hApplied = h()
+
+        if (p(hApplied)) Option((hApplied, t()))
+        else None
+    }
 
   @tailrec
   final def drop(n: Int): Stream[A] = this match {
@@ -190,6 +316,12 @@ sealed trait Stream[+A] {
   def map[B](f: A => B): Stream[B] =
     foldRight(empty[B])((a, b) => cons(f(a), b))
 
+  def mapUsingUnfold[B](f: A => B): Stream[B] =
+    unfold(this) {
+      case Empty => None
+      case Cons(h, t) => Option(f(h()), t())
+    }
+
   def filter(p: A => Boolean): Stream[A] =
     foldRight(empty[A]) { (a, b) =>
       if (p(a)) cons(a, b)
@@ -201,6 +333,41 @@ sealed trait Stream[+A] {
 
   def flatMap[B](f: A => Stream[B]): Stream[B] =
     foldRight(empty[B])((a, b) => f(a) append b)
+
+  // Since intermediate streams aren’t instantiated, it’s easy to reuse existing combina-tors in novel ways
+  // without having to worry that we’re doing more processing of the stream than necessary.
+  // E.g. we can reuse filter to define find, a method to return just the first element that matches if it exists.
+  // Even though filter transforms the whole stream, that transformation is done lazily, so find terminates as soon as a match is found:
+  def find(p: A => Boolean): Option[A] =
+    filter(p).headOption
+
+  def zipWith[B, C](s2: Stream[B])(f: (A, B) => C): Stream[C] =
+    unfold((this, s2)) {
+      case (Cons(h1, t1), Cons(h2, t2)) =>
+        Option(f(h1(), h2()), t1() -> t2())
+
+      case _ =>
+        None
+    }
+
+  // Special case of `zipWith`
+  def zip[B](s2: Stream[B]): Stream[(A, B)] =
+    zipWith(s2)(_ -> _)
+
+  def zipAll[B](s2: Stream[B]): Stream[(Option[A], Option[B])] =
+    unfold(this, s2) {
+      case (Cons(h1, t1), Cons(h2, t2)) =>
+        Option(Option(h1()) -> Option(h2()), t1() -> t2())
+
+      case (Cons(h1, t1), _) =>
+        Option(Option(h1()) -> (None: Option[B]), t1() -> Empty)
+
+      case (_, Cons(h2, t2)) =>
+        Option((None: Option[A]) -> Option(h2()), Empty -> t2())
+
+      case _ =>
+        None
+    }
 }
 
 case object Empty extends Stream[Nothing]
@@ -208,6 +375,9 @@ case object Empty extends Stream[Nothing]
 case class Cons[+A](h: () => A, t: () => Stream[A]) extends Stream[A]
 
 object Stream {
+  def apply[A](as: A*): Stream[A] =
+    if (as.isEmpty) empty else cons(as.head, apply(as.tail: _*))
+
   // A smart constructor for creating a nonempty stream.
   def cons[A](hd: => A, tl: => Stream[A]): Stream[A] = {
     // We cache the head and tail as lazy values to avoid repeated evaluation.
@@ -220,6 +390,41 @@ object Stream {
   // A smart constructor for creating an empty stream of a particular type.
   def empty[A]: Stream[A] = Empty
 
-  def apply[A](as: A*): Stream[A] =
-    if (as.isEmpty) empty else cons(as.head, apply(as.tail: _*))
+  def constant[A](a: A): Stream[A] = cons(a, constant(a))
+
+  def constantUsingUnfold[A](a: A): Stream[A] =
+    unfold(a)(state => Option(state, state))
+
+  def from(n: Int): Stream[Int] = cons(n, from(n + 1))
+
+  def fromUsingUnfold(n: Int): Stream[Int] =
+    unfold(n)(state => Option(state, state + 1))
+
+  def fibs: Stream[Int] = {
+    def fibs(x: Int, y: Int): Stream[Int] =
+      cons(y, fibs(y, x + y))
+
+    cons(0, fibs(0, 1))
+  }
+
+  def fibsAlternative: Stream[Int] = {
+    def fibs(x: Int, y: Int): Stream[Int] =
+      cons(y, fibs(y, x + y))
+
+    fibs(0, 1)
+  }
+
+  def fibsUsingUnfold: Stream[Int] =
+    unfold((0, 1)) { case (x, y) =>
+      Option(x, (y, x + y))
+    }
+
+  def unfold[A, S](z: S)(f: S => Option[(A, S)]): Stream[A] =
+    f(z) match {
+      case None => empty[A]
+      case Some((a, next)) => cons(a, unfold(next)(f))
+    }
+
+  def ones: Stream[Int] =
+    unfold(1)(state => Option(state, state))
 }
