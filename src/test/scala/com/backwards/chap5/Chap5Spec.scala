@@ -205,16 +205,31 @@ class Chap5Spec extends AnyWordSpec with Matchers {
       stream1.drop(3).zipAll(stream2).toList mustBe List(None -> Option("4"), None -> Option("5"), None -> Option("6"))
     }
 
-    "5.14" in {
+    "5.14 startsWith - check if one Stream is a prefix of another. For instance, Stream(1, 2, 3) startsWith Stream(1, 2) would be true" in {
+      val source = Stream(1, 2, 3)
+      val target = Stream(1, 2)
 
+      source.startsWith(target) mustBe true
     }
 
-    "5.15" in {
+    "5.15a tails - for a given Stream, tails returns the Stream of suffixes of the input sequence e.g. given Stream(1, 2, 3), it would return Stream(Stream(1, 2, 3), Stream(2, 3), Stream(3), Stream())" in {
+      val stream = Stream(1, 2, 3)
 
+      stream.tails.toList.map(_.toList) mustBe List(List(1, 2, 3), List(2, 3), List(3), Nil)
     }
 
-    "5.16" in {
+    "5.15b hasSubsequence" in {
+      val stream = Stream(1, 2, 3, 4, 5)
 
+      stream.hasSubsequence(Stream(3, 4)) mustBe true
+      stream.hasSubsequence(Stream(1, 3)) mustBe false
+      stream.hasSubsequence(Stream("a")) mustBe false
+    }
+
+    "5.16 scanRight that generalises tails, which is like a foldRight that returns a stream of the intermediate results" in {
+      val stream = Stream(1, 2, 3)
+
+      stream.scanRight(0)(_ + _).toList mustBe List(6, 5, 3, 0)
     }
   }
 }
@@ -368,6 +383,46 @@ sealed trait Stream[+A] {
       case _ =>
         None
     }
+
+  def startsWithRubbish[B >: A](s: Stream[B]): Boolean = {
+    @tailrec
+    def startsWith(source: Stream[A], target: Stream[B]): Boolean = (source, target) match {
+      case (Cons(sh, st), Cons(th, tt)) if sh() == th() => startsWith(st(), tt())
+      case (Cons(_, _), Empty) => true
+      case (Empty, Cons(_, _)) => false
+      case (Empty, Empty) => true
+    }
+
+    startsWith(this, s)
+  }
+
+  def startsWith[B](s: Stream[B]): Boolean = {
+    zipAll(s) takeWhile { case (_, b) =>
+      b.isDefined
+    } forAll { case (a, b) =>
+      a == b
+    }
+  }
+
+  // The last element of `tails` is always the empty `Stream`, so we handle this as a special case, by appending it to the output.
+  def tails: Stream[Stream[A]] =
+    unfold(this) {
+      case Empty => None
+      case c @ Cons(_, t) => Option((c, t()))
+    } append Stream(empty)
+
+  def hasSubsequence[B](s: Stream[B]): Boolean =
+    tails exists (_ startsWith s)
+
+  def scanRight[B](z: B)(f: (A, => B) => B): Stream[B] = {
+    val (_, output) = foldRight((z, Stream(z)))((a, acc) => {
+      lazy val (z, accBreadCrumbs) = acc
+      val newAcc = f(a, z)
+      (newAcc, cons(newAcc, accBreadCrumbs))
+    })
+
+    output
+  }
 }
 
 case object Empty extends Stream[Nothing]
