@@ -104,8 +104,22 @@ class Chap6Spec extends AnyWordSpec with Matchers {
       n must be <= 10
     }
 
-    "6.9" in {
-      // TODO
+    "6.9a map using flatMap" in {
+      val (n, rng2) = mapUsingFlatMap(double)(_ * 2)(SimpleRNG(42))
+
+      n mustBe 0.007524831686168909 * 2
+      rng2 mustBe SimpleRNG(1059025964525L)
+    }
+
+    "6.9b map2 using flatMap" in {
+      val rng = map2UsingFlatMap(nonNegativeInt, nonNegativeInt)(_ + _)
+
+      val (n, _) = rng(SimpleRNG(42))
+
+      val (na, rngA) = nonNegativeInt(SimpleRNG(42))
+      val (nb, _) = nonNegativeInt(rngA)
+
+      n mustBe (na + nb)
     }
   }
 }
@@ -214,6 +228,9 @@ object RNG {
     (f(a), rng2)
   }
 
+  def mapUsingFlatMap[A, B](s: Rand[A])(f: A => B): Rand[B] =
+    flatMap(s)(a => unit(f(a)))
+
   def nonNegativeEven: Rand[Int] =
     map(nonNegativeInt)(i => i - i % 2)
 
@@ -223,6 +240,11 @@ object RNG {
 
     (f(a, b), rng3)
   }
+
+  def map2UsingFlatMap[A, B, C](ra: Rand[A], rb: Rand[B])(f: (A, B) => C): Rand[C] =
+    flatMap(ra) { a =>
+      map(rb)(b => f(a, b))
+    }
 
   def both[A, B](ra: Rand[A], rb: Rand[B]): Rand[(A, B)] =
     map2(ra, rb)(_ -> _)
