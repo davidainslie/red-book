@@ -1,9 +1,10 @@
 package com.backwards.chap7
 
 import java.util.concurrent._
+import java.util.concurrent.atomic.AtomicReference
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
-import com.backwards.chap7.Par._
+import com.backwards.chap7.Par.{Par, fork, unit}
 
 class Chap7Spec extends AnyWordSpec with Matchers {
   println(s"Chap7Spec on thread ${Thread.currentThread.getName}")
@@ -11,6 +12,8 @@ class Chap7Spec extends AnyWordSpec with Matchers {
   val executorService: ExecutorService = Executors.newFixedThreadPool(3)
 
   "Parallelism" should {
+    import com.backwards.chap7.Par._
+
     "7.1 map2" in {
       def sum(ints: IndexedSeq[Int]): Par[Int] =
         if (ints.size <= 1) {
@@ -62,11 +65,68 @@ class Chap7Spec extends AnyWordSpec with Matchers {
     }
 
     "7.5 sequence" in {
-      // TODO
+      val par: Par[List[Int]] = sequence(List(unit(1), unit(2), unit(3)))
+
+      val future: Future[List[Int]] = Par.run(executorService)(par)
+
+      future.get() mustBe List(1, 2, 3)
     }
 
-    "7.6" in {
-      // TODO
+    "7.6 parFilter" in {
+      val par: Par[List[Int]] = parFilter(List(1, 2, 3, 4, 5))(_ % 2 == 0)
+
+      val future: Future[List[Int]] = Par.run(executorService)(par)
+
+      future.get() mustBe List(2, 4)
+    }
+
+    "7.7" in {
+      // Think about design
+    }
+
+    "7.8 executors and an initial bug in fork - the following will deadlock" in {
+      val a = lazyUnit(42 + 1)
+
+      val S = Executors.newFixedThreadPool(1)
+
+      // The following deadlocks as 2 threads would need to be available but there is only 1 in the pool
+      // Par.equal(S)(a, fork(a)) mustBe true
+    }
+
+    "7.9" in {
+      // 7.8 highlights the fact that using a fixed size thread pool can cause our original implementaiton of "fork" to deadlock
+      // Next exercise (in a separate "should") we explore implementation via "actors".
+    }
+  }
+
+  // The essential problem with the current representation is that we can't get a value out of a Future without the current thread blocking on its get method.
+  // A representation of Par that doesn't leak resources this way has to be non-blocking,
+  // in the sense that the implementations of fork and map2 must never call a method that blocks the current thread like Future.get.
+  "Parallelism with actors" should {
+    import com.backwards.chap7.ParActor._
+
+    "example" in {
+      val S = Executors.newFixedThreadPool(4)
+
+      val echoer = Actor[String](S) {
+        msg => println (s"Got message: '$msg'")
+      }
+
+      echoer ! "hello"
+      // PRINT OUT: Got message: 'hello'
+
+      echoer ! "goodbye"
+      // PRINT OUT: Got message: 'goodbye'
+    }
+
+    "example showing multiple parallel computations using only 2 threads" in {
+      val p = parMap(1 to 1000 toList)(math.sqrt(_))
+      // p: ExecutorService => Future[List[Double]] = < function >
+
+      // This will call fork about 1000 times, starting that many actors to combine these values two at a time.
+      // Thanks to our non-blocking Actor implementation, we don't need 1000 JVM threads to do that in.
+      val x = ParActor.run(Executors.newFixedThreadPool(2))(p)
+      // PRINT OUT x: List[Double] = List(1.0, 1.4142135623730951, 1.7320508075688772, 2.0, 2.23606797749979, 2.449489742783178, 2.6457513110645907, 2.828 4271247461903, 3.0, 3.1622776601683795, 3.3166247903554, 3.46410...
     }
   }
 }
@@ -192,7 +252,47 @@ object Par {
       sequence(fbs)
     }
 
-  def sequence[A](ps: List[Par[A]]): Par[List[A]] = ???
+  def sequence[A](ps: List[Par[A]]): Par[List[A]] =
+    ps.foldRight(unit(List.empty[A])) { (p, acc) =>
+      map2(acc, p) { (as, a) => a +: as}
+    }
+
+  // This implementation forks the recursive step off to a new logical thread, making it effectively tail-recursive.
+  // However, we are constructing a right-nested parallel program, and we can get better performance by dividing the list in half, and running both halves in parallel.
+  // See `sequenceBalanced` below.
+  def sequenceRight[A](as: List[Par[A]]): Par[List[A]] =
+    as match {
+      case Nil => unit(Nil)
+      case h +: t => map2(h, fork(sequenceRight(t)))(_ +: _)
+    }
+
+  // We define `sequenceBalanced` using `IndexedSeq`, which provides an efficient function for splitting the sequence in half.
+  def sequenceBalanced[A](as: IndexedSeq[Par[A]]): Par[IndexedSeq[A]] = fork {
+    if (as.isEmpty) {
+      unit(Vector.empty)
+    } else if (as.length == 1) {
+      map(as.head)(a => Vector(a))
+    } else {
+      val (l, r) = as.splitAt(as.length / 2)
+      map2(sequenceBalanced(l), sequenceBalanced(r))(_ ++ _)
+    }
+  }
+
+  def sequenceAlt[A](as: List[Par[A]]): Par[List[A]] =
+    map(sequenceBalanced(as.toIndexedSeq))(_.toList)
+
+  def parFilter[A](as: List[A])(f: A => Boolean): Par[List[A]] =
+    map(
+      sequence(
+        as map asyncF(a => List(a) filter f)
+      )
+    )(_.flatten)
+
+  def equal[A](e: ExecutorService)(p: Par[A], p2: Par[A]): Boolean =
+    p(e).get == p2(e).get
+
+  def delay[A](fa: => Par[A]): Par[A] =
+    es => fa(es)
 
   private case class UnitFuture[A](get: A) extends Future[A] {
     println(s"UnitFuture($get) on thread ${Thread.currentThread.getName}")
@@ -205,4 +305,122 @@ object Par {
 
     def cancel(evenIfRunning: Boolean): Boolean = false
   }
+}
+
+/**
+ * How can we implement a non-blocking representation of Par? The idea is simple.
+ * Instead of turning a Par into a java.util.concurrent.Future that we can get a value out of (which requires blocking),
+ * we'll introduce our own version of Future with which we can register a callback that will be invoked when the result is ready.
+ *
+ * The Future type we defined here is rather imperative. An A => Unit?
+ * Such a function can only be useful for executing some side effect using the given A, as we certainly aren't using the returned result.
+ * Are we still doing functional programming in using a type like Future?
+ * Yes, but we're making use of a common technique of using side effects as an implementation detail for a purely functional API.
+ */
+object ParActor {
+  sealed trait Future[A] {
+    /**
+     * The apply method is declared private to the chap7 package,
+     * which means that it can only be accessed by code within that package.
+     */
+    private[chap7] def apply(k: A => Unit): Unit
+  }
+
+  /**
+   * Par looks the same, but we're using our new non-blocking Future instead of the one in java.util.concurrent.
+   */
+  type Par[A] = ExecutorService => Future[A]
+
+  def run[A](es: ExecutorService)(p: Par[A]): A = {
+    // Mutable thread-safe reference for storing the result.
+    val ref: AtomicReference[A] = new AtomicReference[A]
+
+    // A java.util.concurrent.CountDownLatch allows threads to wait until its countDown method is called a certain number of times.
+    // Here the countDown method will be called once when we've received the value of type A from p,
+    // and we want the run implementation to block until that happens.
+    val latch: CountDownLatch = new CountDownLatch(1)
+
+    // When we receive the value, sets the result and releases the latch.
+    p(es) { a =>
+      ref.set(a)
+      latch.countDown()
+    }
+
+    // Waits until the result becomes available and the latch is released.
+    latch.await()
+
+    // Once we've passed the latch, we know ref has been set, and we return its value.
+    ref.get
+  }
+
+  // Simply passes the value to the continuation. Note that the ExecutorService isn't needed.
+  def unit[A](a: A): Par[A] =
+    es => new Future[A] {
+      def apply(cb: A => Unit): Unit = cb(a)
+    }
+
+  def lazyUnit[A](a: A): Par[A] = fork(unit(a))
+
+  // eval forks off evaluation of a and returns immediately. The callback will be invoked asynchronously on another thread.
+  def fork[A](a: => Par[A]): Par[A] =
+    es => new Future[A] {
+      def apply(cb: A => Unit): Unit =
+        eval(es)(a(es)(cb))
+    }
+
+  // A helper function to evaluate an action asynchronously using some ExecutorService.
+  def eval(es: ExecutorService)(r: => Unit): Unit =
+    es.submit(new Callable[Unit] {
+      def call: Unit = r
+    })
+
+  def map2[A, B, C](p: Par[A], p2: Par[B])(f: (A, B) => C): Par[C] =
+    es => new Future[C] {
+      def apply(cb: C => Unit): Unit = {
+        // Two mutable vars are used to store the two results.
+        var ar: Option[A] = None
+        var br: Option[B] = None
+
+        // An actor that awaits both results, combines them with f, and passes the result to cb.
+        val combiner = Actor[A Either B](es) {
+          // If the A result came in first, stores it in ar and waits for the B.
+          // If the A result came last and we already have our B, calls f with both results and passes the resulting C to the callback, cb.
+          case Left(a) => br match {
+            case None => ar = Some(a)
+            case Some(b) => eval(es)(cb(f(a, b)))
+          }
+
+          // Analogously, if the B result came in first, stores it in br and waits for the A.
+          // If the B result came last and we already have our A, calls f with both results and passes the resulting C to the callback, cb.
+          case Right(b) => ar match {
+            case None => br = Some(b)
+            case Some(a) => eval(es)(cb(f(a, b)))
+          }
+        }
+
+        // Passes the actor as a continuation to both sides.
+        // On the A side, we wrap the result in Left, and on the B side, we wrap it in Right.
+        // These are the constructors of the Either data type, and they serve to indicate to the actor where the result came from.
+        p(es)(a => combiner ! Left(a))
+        p2(es)(b => combiner ! Right(b))
+      }
+    }
+
+  /**
+   * A function to convert any function A => B to one that evaluates its result asynchronously.
+   */
+  def asyncF[A, B](f: A => B): A => Par[B] =
+    (a: A) => lazyUnit(f(a))
+
+  // Map over a list in parallel
+  def parMap[A,B](ps: List[A])(f: A => B): Par[List[B]] =
+    fork {
+      val fbs: List[Par[B]] = ps.map(asyncF(f))
+      sequence(fbs)
+    }
+
+  def sequence[A](ps: List[Par[A]]): Par[List[A]] =
+    ps.foldRight(unit(List.empty[A])) { (p, acc) =>
+      map2(acc, p) { (as, a) => a +: as}
+    }
 }

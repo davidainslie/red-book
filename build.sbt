@@ -34,7 +34,7 @@ def project(id: String, base: File): Project =
         "-language:existentials",
         "-language:postfixOps",
         "-Ymacro-annotations",
-        "-Ywarn-value-discard",
+        // "-Ywarn-value-discard",
         "-Xfatal-warnings"
       ),
       fork := true,
