@@ -4,7 +4,6 @@ import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicReference
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
-import com.backwards.chap7.Par.{Par, fork, unit}
 
 class Chap7Spec extends AnyWordSpec with Matchers {
   println(s"Chap7Spec on thread ${Thread.currentThread.getName}")
@@ -96,6 +95,54 @@ class Chap7Spec extends AnyWordSpec with Matchers {
     "7.9" in {
       // 7.8 highlights the fact that using a fixed size thread pool can cause our original implementaiton of "fork" to deadlock
       // Next exercise (in a separate "should") we explore implementation via "actors".
+    }
+
+    "7.11 choiceN" in {
+      val par: Par[String] = choiceN(lazyUnit(3))(List(lazyUnit("a"), lazyUnit("b"), lazyUnit("c"), lazyUnit("d"), lazyUnit("e")))
+
+      val future: Future[String] = Par.run(executorService)(par)
+
+      future.get() mustBe "d"
+    }
+
+    "7.11b choice using choiceN" in {
+      val par: Par[String] = choiceUsingChoiceN(lazyUnit(false))(lazyUnit("c"), lazyUnit("d"))
+
+      val future: Future[String] = Par.run(executorService)(par)
+
+      future.get() mustBe "d"
+    }
+
+    "7.12 choiceMap" in {
+      val par: Par[String] = choiceMap[Int, String](lazyUnit(3))(Map(0 -> lazyUnit("a"), 1 -> lazyUnit("b"), 2 -> lazyUnit("c"), 3 -> lazyUnit("d"), 4 ->lazyUnit("e")))
+
+      val future: Future[String] = Par.run(executorService)(par)
+
+      future.get() mustBe "d"
+    }
+
+    "7.13 chooser" in {
+      val par: Par[String] = chooser(lazyUnit(3))(Map(0 -> lazyUnit("a"), 1 -> lazyUnit("b"), 2 -> lazyUnit("c"), 3 -> lazyUnit("d"), 4 ->lazyUnit("e")).apply)
+
+      val future: Future[String] = Par.run(executorService)(par)
+
+      future.get() mustBe "d"
+    }
+
+    "7.14 flatMap" in {
+      val par: Par[String] = flatMap(lazyUnit(3))(Map(0 -> lazyUnit("a"), 1 -> lazyUnit("b"), 2 -> lazyUnit("c"), 3 -> lazyUnit("d"), 4 ->lazyUnit("e")).apply)
+
+      val future: Future[String] = Par.run(executorService)(par)
+
+      future.get() mustBe "d"
+    }
+
+    "7.14b join" in {
+      val par: Par[Int] = join(lazyUnit(lazyUnit(3)))
+
+      val future: Future[Int] = Par.run(executorService)(par)
+
+      future.get() mustBe 3
     }
   }
 
@@ -293,6 +340,53 @@ object Par {
 
   def delay[A](fa: => Par[A]): Par[A] =
     es => fa(es)
+
+  // This constructs a computation that proceeds with "t" if cond results in true, or "f" if cond results in false.
+  // We can implement this by blocking on the result of the cond and then using the result to determine whether to run "t" or "f".
+  def choice[A](cond: Par[Boolean])(t: Par[A], f: Par[A]): Par[A] =
+    es => if (run(es)(cond).get) t(es) else f(es)
+
+  def choiceN[A](n: Par[Int])(choices: List[Par[A]]): Par[A] =
+    es => run(es)(choices(n(es).get()))
+
+  def choiceUsingChoiceN[A](cond: Par[Boolean])(t: Par[A], f: Par[A]): Par[A] =
+    choiceN(map(cond)(bool => if (bool) 0 else 1))(List(t, f))
+
+  def choiceMap[K, V](key: Par[K])(choices: Map[K, Par[V]]): Par[V] =
+    es => run(es)(choices(key(es).get()))
+
+  def chooser[A, B](pa: Par[A])(choices: A => Par[B]): Par[B] =
+    es => run(es)(choices(pa(es).get()))
+
+  def choiceUsingChooser[A](cond: Par[Boolean])(t: Par[A], f: Par[A]): Par[A] =
+    chooser(cond)(a => if (a) t else f)
+
+  def choiceNUsingChooser[A](n: Par[Int])(choices: List[Par[A]]): Par[A] =
+    chooser(n)(choices)
+
+  /**
+   * chooser is actually the more usual flatMap
+   *
+   * i.e. chooser is no longer the most appropriate name for this operation, which is actually quite general.
+   * It's a parallel computation that, when run, will run an initial computation whose result is used to determine a second computation.
+   * Nothing says that this second computation needs to even exist before the first computation’s result is available.
+   * It doesn’t need to be stored in a container like List or Map.
+   */
+  def flatMap[A, B](a: Par[A])(f: A => Par[B]): Par[B] =
+    es => run(es)(f(a(es).get()))
+
+  /**
+   * The name flatMap is suggestive of the fact that this operation could be decomposed into two steps:
+   * mapping f: A => Par[B] over our Par[A], which generates a Par[Par[B]],
+   * and then flattening this nested Par[Par[B]] to a Par[B].
+   * We call it join since conceptually it’s a parallel computation that, when run, will execute the inner computation,
+   * wait for it to finish (much like Thread.join), and then return its result.
+   */
+  def join[A](a: Par[Par[A]]): Par[A] =
+    es => run(es)(a(es).get())
+
+  def joinUsinFlatMap [A](a: Par[Par[A]]): Par[A] =
+    flatMap(a)(identity)
 
   private case class UnitFuture[A](get: A) extends Future[A] {
     println(s"UnitFuture($get) on thread ${Thread.currentThread.getName}")
