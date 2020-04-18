@@ -65,7 +65,7 @@ class Chap6Spec extends AnyWordSpec with Matchers {
       map isn’t powerful enough to implement intDouble and doubleInt.
       We need is a new combinator map2 that can combine two RNG actions into one using a binary rather than unary function.
     """ in {
-      val rng = map2(nonNegativeInt, nonNegativeInt)(_ + _)
+      val rng: Rand[Int] = map2(nonNegativeInt, nonNegativeInt)(_ + _)
 
       val (n, _) = rng(SimpleRNG(42))
 
@@ -211,6 +211,11 @@ object RNG {
 
     go(count, rng, List())
   }
+
+  def boolean(rng: RNG): (Boolean, RNG) =
+    rng.nextInt match {
+      case (i, rng2) => (i % 2 == 0, rng2)
+    }
 
   // Previously (above) notice a common pattern: each of the functions has a type of the form RNG => (A, RNG) for some type A.
   type Rand[+A] = RNG => (A, RNG)
