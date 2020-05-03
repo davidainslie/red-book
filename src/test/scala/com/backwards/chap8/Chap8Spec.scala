@@ -1,9 +1,12 @@
 package com.backwards.chap8
 
+import java.util.concurrent.{ExecutorService, Executors}
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import com.backwards.chap6.{RNG, State}
 import com.backwards.chap6.RNG.SimpleRNG
+import com.backwards.chap7.Par
+import com.backwards.chap7.Par.Par
 import com.backwards.chap8.Prop._
 
 class Chap8Spec extends AnyWordSpec with Matchers {
@@ -163,6 +166,44 @@ class Chap8Spec extends AnyWordSpec with Matchers {
 
       i mustBe List.fill(10)(5)
     }
+
+    "8.13 listOf1 - essentially a non empty list i.e. a list with at least 1 item" in {
+      SProp.run(SGen.maxProp)
+    }
+
+    "8.14 sorted prop" in {
+      SProp.run(SGen.sortedProp)
+    }
+
+    "8.15 check" in {
+      val ES: ExecutorService = Executors.newCachedThreadPool
+
+      val p2: SProp = SProp.check {
+        val p = Par.map(Par.unit(1))(_ + 1)
+        val p2 = Par.unit(2)
+
+        p(ES).get == p2(ES).get
+      }
+
+      val result: Result = p2.run(100, 100, SimpleRNG(3))
+      result mustBe Passed
+    }
+
+    "8.15 check nicer" in {
+      val ES: ExecutorService = Executors.newCachedThreadPool
+
+      def equal[A](p: Par[A], p2: Par[A]): Par[Boolean] =
+        Par.map2(p, p2)(_ == _)
+
+      val p3 = SProp.check {
+        equal(
+          Par.map(Par.unit(1))(_ + 1), Par.unit(2)
+        )(ES).get
+      }
+
+      val result: Result = p3.run(100, 100, SimpleRNG(3))
+      result mustBe Passed
+    }
   }
 }
 
@@ -181,6 +222,9 @@ final case class Gen[A](sample: State[RNG, A]) {
 
   def unsized: SGen[A] =
     SGen(_ => this)
+
+  def map2[B, C](g: Gen[B])(f: (A, B) => C): Gen[C] =
+    Gen(sample.map2(g.sample)(f))
 }
 
 object Gen {
@@ -277,6 +321,10 @@ case object Passed extends Result {
   def isFalsified = false
 }
 
+case object Proved extends Result {
+  def isFalsified = false
+}
+
 case class Falsified(failure: FailedCase, successes: SuccessCount) extends Result {
   def isFalsified = true
 }
@@ -291,18 +339,39 @@ case class SGen[A](forSize: Int => Gen[A]) {
     SGen(n => apply(n).flatMap(a => f(a).forSize(n)))
 }
 
+object SGen {
+  import SProp._
+
+  def listOf1[A](g: Gen[A]): SGen[List[A]] =
+    SGen(n => g.listOfN(n max 1))
+
+  val smallInt: Gen[Int] = Gen.choose(-10, 10)
+
+  val maxProp: SProp = forAll(listOf1(smallInt)(10)) { ns =>
+    val max = ns.max
+    !ns.exists(_ > max)
+  }
+
+  // We specify that every sorted list is either empty, has one element,
+  // or has no two consecutive elements `(a, b)` such that `a` is greater than `b`.
+  val sortedProp: SProp = forAll(Gen.listOf(smallInt)) { l =>
+    val ls = l.sorted
+    l.isEmpty || ls.tail.isEmpty || !ls.zip(ls.tail).exists { case (a, b) => a > b }
+  }
+}
+
 import SProp._
 
-case class SProp(run: (MaxSize,TestCases,RNG) => Result) {
+case class SProp(run: (MaxSize, TestCases, RNG) => Result) {
   def &&(p: SProp): SProp = SProp {
-    (max,n,rng) => run(max,n,rng) match {
-      case Passed /*| Proved*/ => p.run(max, n, rng)
+    (max,n, rng) => run(max, n, rng) match {
+      case Passed | Proved => p.run(max, n, rng)
       case x => x
     }
   }
 
   def ||(p: SProp): SProp = SProp {
-    (max,n,rng) => run(max,n,rng) match {
+    (max, n, rng) => run(max, n,  rng) match {
       // In case of failure, run the other prop.
       case Falsified(msg, _) => p.tag(msg).run(max,n,rng)
       case x => x
@@ -313,7 +382,7 @@ case class SProp(run: (MaxSize,TestCases,RNG) => Result) {
    * the given message on a newline in front of the existing message.
    */
   def tag(msg: String): SProp = SProp {
-    (max,n,rng) => run(max,n,rng) match {
+    (max, n, rng) => run(max, n, rng) match {
       case Falsified(e, c) => Falsified(msg + "\n" + e, c)
       case x => x
     }
@@ -331,6 +400,22 @@ object SProp {
 
   def apply(f: (TestCases,RNG) => Result): SProp =
     SProp { (_, n, rng) => f(n,rng) }
+
+  def run(
+    p: SProp,
+    maxSize: Int = 100,
+    testCases: Int = 100,
+    rng: RNG = SimpleRNG(System.currentTimeMillis)
+  ): Unit = p.run(maxSize, testCases, rng) match {
+    case Falsified(msg, n) =>
+      println(s"! Falsified after $n passed tests:\n $msg")
+
+    case Passed =>
+      println(s"+ OK, passed $testCases tests.")
+
+    case Proved =>
+      println(s"+ OK, proved property.")
+  }
 
   def forAll[A](as: Gen[A])(f: A => Boolean): SProp = SProp {
     (n, rng) => randomStream(as)(rng).zip(LazyList.from(0)).take(n).map {
@@ -369,4 +454,29 @@ object SProp {
        |generated exception: ${e.getMessage}
        |stack trace:
        |${e.getStackTrace.mkString("\n")}""".stripMargin
+
+  def check(p: => Boolean): SProp = SProp { (_, _, _) =>
+    if (p) Passed else Falsified("()", 0)
+  }
+
+  def weighted[A](g1: (Gen[A], Double), g2: (Gen[A], Double)): Gen[A] = {
+    val (gen1, probability1) = g1
+    val (gen2, probability2) = g2
+
+    // The probability we should pull from `g1`
+    val g1Threshold = probability1.abs / (probability1.abs + probability2.abs)
+
+    Gen(State(RNG.double).flatMap(d => if (d < g1Threshold) gen1.sample else gen2.sample))
+  }
+
+  // This generator creates a fixed thread pool executor 75% of the time and an unbounded one 25% of the time.
+  val S: Gen[ExecutorService] = weighted(
+    Gen.choose(1, 4).map(Executors.newFixedThreadPool) -> .75,
+    Gen.unit(Executors.newCachedThreadPool) -> .25
+  )
+
+  def forAllPar[A](g: Gen[A])(f: A => Par[Boolean]): SProp =
+    SProp.forAll(S.map2(g)((_, _))) {
+      case (s, a) => f(a)(s).get
+    }
 }
