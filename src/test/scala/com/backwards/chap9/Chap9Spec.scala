@@ -1,20 +1,38 @@
 package com.backwards.chap9
 
+import scala.util.matching.Regex
 import org.scalacheck._
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalacheck.Prop.forAll
 
-class Chap9Spec extends AnyWordSpec with Matchers {
-  "Parser" should {
-    "9.1 map2" in {
+class Chap9Spec extends AnyWordSpec with Matchers
 
-    }
-  }
+trait JSON
+
+object JSON {
+  case object JNull extends JSON
+
+  case class JNumber(get: Double) extends JSON
+
+  case class JString(get: String) extends JSON
+
+  case class JBool(get: Boolean) extends JSON
+
+  case class JArray(get: IndexedSeq[JSON]) extends JSON
+
+  case class JObject(get: Map[String, JSON]) extends JSON
 }
 
 /**
  * Parser[+_] -> A type parameter that is itself a type constructor
+ *
+ * - string(s): Recognizes and returns a single String
+ * - regex(s): Recognizes a regular expression s
+ * - slice(p): Returns the portion of input inspected by p if successful
+ * - succeed(a): Always succeeds with the value a
+ * - flatMap(p)(f): Runs a parser, then uses its result to select a second parser to run in sequence
+ * - or(p1, p2): Chooses between two parsers, first attempting p1, and then p2 if p1 fails
  */
 trait Parsers[ParseError, Parser[+_]] { self => // This introduces the name self to refer to this Parsers instance; it’s used later in ParserOps.
   def run[A](p: Parser[A])(input: String): ParseError Either A
@@ -53,7 +71,8 @@ trait Parsers[ParseError, Parser[+_]] { self => // This introduces the name self
   // Without changing "many" to be too specific and result in required Parser[Int], we can instead combine "many" with "map" resulting in a Parser[Int] e.g.
   val theCount: Parser[Int] = map(many(char('a')))(_.size)
 
-  def map[A, B](a: Parser[A])(f: A => B): Parser[B]
+  def map[A, B](a: Parser[A])(f: A => B): Parser[B] =
+    flatMap(a)(f andThen succeed)
 
   // This parser always succeeds with the value a, regardless of the input string (since string("") will always succeed, even if the input is empty)
   def succeed[A](a: A): Parser[A] =
@@ -63,7 +82,8 @@ trait Parsers[ParseError, Parser[+_]] { self => // This introduces the name self
 
   def many1[A](p: Parser[A]): Parser[List[A]]
 
-  def product[A, B](p: Parser[A], p2: => Parser[B]): Parser[(A, B)]
+  def product[A, B](p: Parser[A], p2: => Parser[B]): Parser[(A, B)] =
+    flatMap(p)(a => map(p2)(b => (a, b)))
 
   def map2[A, B, C](p1: Parser[A], p2: => Parser[B])(f: (A, B) => C): Parser[C] =
     flatMap(p1) { a =>
@@ -73,6 +93,8 @@ trait Parsers[ParseError, Parser[+_]] { self => // This introduces the name self
     }
 
   def flatMap[A, B](p: Parser[A])(f: A => Parser[B]): Parser[B]
+
+  implicit def regex(r: Regex): Parser[String]
 
   // Use "self" to explicitly disambiguate reference to the "or" method on the trait
   case class ParserOps[A](p: Parser[A]) {
