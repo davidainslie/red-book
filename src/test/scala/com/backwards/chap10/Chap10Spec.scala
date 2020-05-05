@@ -48,6 +48,44 @@ class Chap10Spec extends AnyWordSpec with Matchers with ScalaCheckDrivenProperty
 
       monoidLaws(intAddition, Gen.chooseNum(-100, 100))
     }
+
+    "10.5 foldMap" in {
+      foldMap(List("1", "2", "3"), intAddition)(_.toInt) mustBe 6
+    }
+
+    "10.6 foldLeft and foldRight in terms of foldMap" in {
+      foldLeft(List(1, 2, 3))(intAddition.zero)(intAddition.op) mustBe 6
+
+      foldRight(List(1, 2, 3))(intAddition.zero)(intAddition.op) mustBe 6
+    }
+
+    /*
+    Balanced fold:
+
+    As an example, suppose we have a sequence a, b, c, d
+    that we’d like to reduce using some monoid.
+
+    Folding to the right, the combination of a, b, c, and d would look like this:
+      op(a, op(b, op(c, d)))
+
+    Folding to the left would look like this:
+      op(op(op(a, b), c), d)
+
+    But a balanced fold looks like this where the balanced fold allows for parallelism:
+      op(op(a, b), op(c, d))
+    */
+
+    "10.7" in {
+
+    }
+
+    "10.8" in {
+
+    }
+
+    "10.9" in {
+
+    }
   }
 }
 
@@ -63,6 +101,10 @@ object Monoid {
 
     val zero = ""
   }
+
+  // Example usage:
+  val words = List("Hic", "Est", "Index")
+  words.foldRight(stringMonoid.zero)(stringMonoid.op)
 
   def listMonoid[A]: Monoid[List[A]] = new Monoid[List[A]] {
     def op(a1: List[A], a2: List[A]): List[A] = a1 ++ a2
@@ -109,4 +151,25 @@ object Monoid {
 
     def zero: A => A = identity
   }
+
+  def concatenate[A](as: List[A], m: Monoid[A]): A =
+    as.foldLeft(m.zero)(m.op)
+
+  def foldMap[A, B](as: List[A], m: Monoid[B])(f: A => B): B =
+    as.foldLeft(m.zero) { (b, a) =>
+      m.op(b, f(a))
+    }
+
+  // We can get the dual of any monoid just by flipping the `op`.
+  def dual[A](m: Monoid[A]): Monoid[A] = new Monoid[A] {
+    def op(x: A, y: A): A = m.op(y, x)
+
+    val zero: A = m.zero
+  }
+
+  def foldLeft[A, B](as: List[A])(z: B)(f: (B, A) => B): B =
+    foldMap(as, dual(endoMonoid[B]))(a => b => f(b, a))(z)
+
+  def foldRight[A, B](as: List[A])(z: B)(f: (A, B) => B): B =
+    foldMap(as, endoMonoid[B])(f.curried)(z)
 }
