@@ -1,11 +1,14 @@
 package com.backwards.chap10
 
+import java.util.concurrent.{ExecutorService, Executors, Future, TimeUnit}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import com.backwards.chap10.Monoid._
+import com.backwards.chap7.Par
+import com.backwards.chap7.Par._
 
 /**
  * A monoid consists of the following:
@@ -75,16 +78,24 @@ class Chap10Spec extends AnyWordSpec with Matchers with ScalaCheckDrivenProperty
       op(op(a, b), op(c, d))
     */
 
-    "10.7" in {
-
+    "10.7 foldMapV for IndexedSeq which allows splitting strategy recursively processing each half and then adding the answers together with the monoid" in {
+      foldMapV(Vector("1", "2", "3"), intAddition)(_.toInt) mustBe 6
     }
 
-    "10.8" in {
+    "10.8 parFoldMap" ignore { // TODO - Never finishes !!!
+      val executorService: ExecutorService = Executors.newFixedThreadPool(3)
 
+      val par: Par[Int] = parFoldMap(Vector("1", "2", "3"), intAddition)(_.toInt)
+
+      val future: Future[Int] = Par.run(executorService)(par)
+
+      future.get(3, TimeUnit.SECONDS) mustBe 6
     }
 
-    "10.9" in {
+    "10.9 ordered" in {
+      ordered(Vector(1, 2, 3)) mustBe true
 
+      ordered(Vector(1, 22, 3)) mustBe false
     }
   }
 }
@@ -172,4 +183,46 @@ object Monoid {
 
   def foldRight[A, B](as: List[A])(z: B)(f: (A, B) => B): B =
     foldMap(as, endoMonoid[B])(f.curried)(z)
+
+  def foldMapV[A, B](v: IndexedSeq[A], m: Monoid[B])(f: A => B): B = v.length match {
+    case 0 =>
+      m.zero
+
+    case 1 =>
+      f(v(0))
+
+    case length =>
+      val (l, r) = v.splitAt(length / 2)
+      m.op(foldMapV(l, m)(f), foldMapV(r, m)(f))
+  }
+
+  def par[A](m: Monoid[A]): Monoid[Par[A]] = new Monoid[Par[A]] {
+    def op(a1: Par[A], a2: Par[A]): Par[A] = Par.map2(a1, a2)(m.op)
+
+    def zero: Par[A] = Par.unit(m.zero)
+  }
+
+  def parFoldMap[A, B](v: IndexedSeq[A], m: Monoid[B])(f: A => B): Par[B] =
+    Par.parMap(v)(f).flatMap { bs =>
+      foldMapV(bs, par(m))(b => Par.lazyUnit(b))
+    }
+
+  // This implementation detects only ascending order,
+  def ordered(ints: IndexedSeq[Int]): Boolean = {
+    // Our monoid tracks the minimum and maximum element seen so far as well as whether the elements are so far ordered.
+    val monoid: Monoid[Option[(Int, Int, Boolean)]] = new Monoid[Option[(Int, Int, Boolean)]] {
+      def op(o1: Option[(Int, Int, Boolean)], o2: Option[(Int, Int, Boolean)]): Option[(Int, Int, Boolean)] =
+        (o1, o2) match {
+          // The ranges should not overlap if the sequence is ordered.
+          case (Some((x1, y1, p)), Some((x2, y2, q))) => Some((x1 min x2, y1 max y2, p && q && y1 <= x2))
+          case (x, None) => x
+          case (None, x) => x
+        }
+
+      val zero: None.type = None
+    }
+
+    // The empty sequence is ordered, and each element by itself is ordered.
+    foldMapV(ints, monoid)(i => Some((i, i, true))).forall(_._3)
+  }
 }
