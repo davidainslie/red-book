@@ -1,6 +1,7 @@
 package com.backwards.chap10
 
 import java.util.concurrent.{ExecutorService, Executors, Future, TimeUnit}
+import scala.annotation.tailrec
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.matchers.must.Matchers
@@ -96,6 +97,148 @@ class Chap10Spec extends AnyWordSpec with Matchers with ScalaCheckDrivenProperty
       ordered(Vector(1, 2, 3)) mustBe true
 
       ordered(Vector(1, 22, 3)) mustBe false
+    }
+
+    "10.10 word count" in {
+      sealed trait WC
+
+      case class Stub(chars: String) extends WC
+
+      case class Part(lStub: String, words: Int, rStub: String) extends WC
+
+      val wcMonoid: Monoid[WC] = new Monoid[WC] {
+        def op(a1: WC, a2: WC): WC = (a1, a2) match {
+          case (Stub(c1), Stub(c2)) =>
+            Stub(c1 + c2)
+
+          case (Part(lStub1, words1, rStub1), Part(lStub2, words2, rStub2)) =>
+            Part(lStub1: String, words1 + (if ((rStub1 + lStub2).isEmpty) 0 else 1) + words2, rStub2)
+
+          case (Stub(c1), Part(lStub2, words2, rStub2)) =>
+            Part(c1 + lStub2, words2, rStub2)
+
+          case (Part(lStub1, words1, rStub1), Stub(c2)) =>
+            Part(lStub1, words1, rStub1 + c2)
+        }
+
+        def zero: WC = Stub("")
+      }
+
+      def count(s: String): Int = {
+        // A single character's count. Whitespace does not count, and non-whitespace starts a new Stub.
+        def wc(c: Char): WC =
+          if (c.isWhitespace)
+            Part("", 0, "")
+          else
+            Stub(c.toString)
+
+        // `unstub(s)` is 0 if `s` is empty, otherwise 1.
+        def unstub(s: String): Int = s.length min 1
+
+        foldMapV(s.toIndexedSeq, wcMonoid)(wc) match {
+          case Stub(s) => unstub(s)
+          case Part(l, w, r) => unstub(l) + w + unstub(r)
+        }
+      }
+
+      count("Well howdy do") mustEqual 3
+    }
+
+    // 10.11 to 10.15 in Foldable
+
+    "10.16 product" in {
+      val m: Monoid[(Int, String)] = productMonoid(intAddition, stringMonoid)
+
+      val (int, string) = m.op(1 -> "1", 2 -> "2")
+
+      int mustBe 3
+      string mustBe "12"
+    }
+
+    "10.17 function" in {
+      val m: Monoid[String => Int] = functionMonoid[String, Int](intAddition)
+
+      val f: String => Int = m.op(_.length, _.indexOf("z"))
+
+      f("x") mustBe 0
+    }
+
+    "10.18 bag" in {
+      bag(Vector("a", "rose", "is", "a", "rose")) mustBe Map("a" -> 2, "rose" -> 2, "is" -> 1)
+    }
+
+    "extra - perform multiple calculations simultaneously when folding over a data structure e.g. calculate mean by simultaneously calculating length and sum of given list" in {
+      val m: Monoid[(Int, Int)] = productMonoid(intAddition, intAddition)
+
+      val (length, sum) = ListFoldable.foldMap(List(1, 2, 3, 4))(a => (1, a))(m)
+
+      val mean: Double = sum / length.toDouble
+
+      mean mustBe 2.5
+    }
+  }
+
+  "Foldable" should {
+    "10.12a Foldable[List]" in {
+      import ListFoldable._
+
+      foldRight(List(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldLeft(List(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldMap(List(1, 2, 3))(identity)(Monoid.intAddition) mustBe 6
+    }
+
+    "10.12b Foldable[IndexedSeq]" in {
+      import IndexedSeqFoldable._
+
+      foldRight(Vector(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldLeft(Vector(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldMap(Vector(1, 2, 3))(identity)(Monoid.intAddition) mustBe 6
+    }
+
+    "10.12c Foldable[LazyList]" in {
+      import LazyListFoldable._
+
+      foldRight(LazyList(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldLeft(LazyList(1, 2, 3))(0)(_ + _) mustBe 6
+
+      foldMap(LazyList(1, 2, 3))(identity)(Monoid.intAddition) mustBe 6
+    }
+
+    "10.13 tree" in {
+      import TreeFoldable._
+
+      foldRight(Branch(
+        Branch(Leaf(1), Leaf(2)), Branch(Leaf(3), Branch(Leaf(4), Leaf(5)))
+      ))(0)(_ + _) mustBe 15
+
+      foldLeft(Branch(
+        Branch(Leaf(1), Leaf(2)), Branch(Leaf(3), Branch(Leaf(4), Leaf(5)))
+      ))(0)(_ + _) mustBe 15
+
+      foldMap(Branch(
+        Branch(Leaf(1), Leaf(2)), Branch(Leaf(3), Branch(Leaf(4), Leaf(5)))
+      ))(identity)(Monoid.intAddition) mustBe 15
+    }
+
+    "10.14 option" in {
+      import OptionFoldable._
+
+      foldRight(Some(5))("6")((i, s) => s + i) mustBe "65"
+
+      foldLeft(Some(5))("6")((s, i) => s + i) mustBe "65"
+
+      foldMap(Some(5))("6" + _)(Monoid.stringMonoid) mustBe "65"
+    }
+
+    "10.15 toList" in {
+      import OptionFoldable._
+
+      toList(Some(5)) mustBe List(5)
     }
   }
 }
@@ -225,4 +368,160 @@ object Monoid {
     // The empty sequence is ordered, and each element by itself is ordered.
     foldMapV(ints, monoid)(i => Some((i, i, true))).forall(_._3)
   }
+
+  def productMonoid[A, B](A: Monoid[A], B: Monoid[B]): Monoid[(A, B)] = new Monoid[(A, B)] {
+    def op(a1: (A, B), a2: (A, B)): (A, B) = {
+      val (a1A, a1B) = a1
+      val (a2A, a2B) = a2
+
+      (A.op(a1A, a2A), B.op(a1B, a2B))
+    }
+
+    def zero: (A, B) = (A.zero, B.zero)
+  }
+
+  def functionMonoid[A, B](B: Monoid[B]): Monoid[A => B] = new Monoid[A => B] {
+    def op(a1: A => B, a2: A => B): A => B =
+      a => B.op(a1(a), a2(a))
+
+    def zero: A => B = _ => B.zero
+  }
+
+  def bag[A](as: IndexedSeq[A]): Map[A, Int] =
+    IndexedSeqFoldable.foldLeft(as)(Map.empty[A, Int]) { (m, a) =>
+      m.updatedWith(a)(_.map(_ + 1).orElse(Option(1)))
+  }
+
+  def mapMergeMonoid[K, V](V: Monoid[V]): Monoid[Map[K, V]] =
+    new Monoid[Map[K, V]] {
+      def zero = Map.empty[K, V]
+
+      def op(a: Map[K, V], b: Map[K, V]): Map[K, V] =
+        (a.keySet ++ b.keySet).foldLeft(zero) { (acc,k) =>
+          acc.updated(k, V.op(a.getOrElse(k, V.zero), b.getOrElse(k, V.zero)))
+        }
+    }
+
+  def bagUsingMapMergeMonoid[A](as: IndexedSeq[A]): Map[A, Int] =
+    foldMapV(as, mapMergeMonoid[A, Int](intAddition))((a: A) => Map(a -> 1))
+}
+
+/**
+ * Here we’re abstracting over a type constructor F.
+ * We write it as F[_], where the underscore indicates that F is not a type but a type constructor that takes one type argument.
+ * Just like functions that take other functions as arguments are called higher-order functions,
+ * something like Foldable is a `higher-order type constructor` or a `higher-kinded type`.
+ *
+ * Just like values and functions have types, types and type constructors have kinds.
+ * Scala uses kinds to track how many type arguments a type constructor takes, whether it’s co- or contravariant in those arguments,
+ * and what the kinds of those arguments are.
+ */
+trait Foldable[F[_]] {
+  def foldRight[A, B](as: F[A])(z: B)(f: (A, B) => B): B =
+    foldMap(as)(f.curried)(endoMonoid[B])(z)
+
+  def foldLeft[A, B](as: F[A])(z: B)(f: (B, A) => B): B =
+    foldMap(as)(a => (b: B) => f(b, a))(dual(endoMonoid[B]))(z)
+
+  def foldMap[A, B](as: F[A])(f: A => B)(mb: Monoid[B]): B =
+    foldRight(as)(mb.zero)((a, b) => mb.op(f(a), b))
+
+  def concatenate[A](as: F[A])(m: Monoid[A]): A =
+    foldLeft(as)(m.zero)(m.op)
+
+  def toList[A](as: F[A]): List[A] =
+    foldRight(as)(List.empty[A])(_ :: _)
+
+  def flip[A, B](f: (A, B) => B): (B, A) => B =
+    (b: B, a: A) => f(a, b)
+}
+
+object ListFoldable extends Foldable[List] {
+  override def foldRight[A, B](as: List[A])(z: B)(f: (A, B) => B): B =
+    foldLeft(as)(z)(flip(f))
+
+  override def foldLeft[A, B](as: List[A])(z: B)(f: (B, A) => B): B = {
+    @tailrec
+    def go(as: List[A], acc: B): B = as match {
+      case Nil => acc
+      case a +: as => go(as, f(acc, a))
+    }
+
+    go(as, z)
+  }
+
+  override def foldMap[A, B](as: List[A])(f: A => B)(mb: Monoid[B]): B =
+    foldLeft(as)(mb.zero)((b, a) => mb.op(f(a), b))
+
+  override def toList[A](as: List[A]): List[A] = as
+}
+
+object IndexedSeqFoldable extends Foldable[IndexedSeq] {
+  override def foldRight[A, B](as: IndexedSeq[A])(z: B)(f: (A, B) => B): B =
+    foldLeft(as)(z)(flip(f))
+
+  override def foldLeft[A, B](as: IndexedSeq[A])(z: B)(f: (B, A) => B): B = {
+    @tailrec
+    def go(as: IndexedSeq[A], acc: B): B = as match {
+      case as if as.isEmpty => acc
+      case a +: as => go(as, f(acc, a))
+    }
+
+    go(as, z)
+  }
+
+  override def foldMap[A, B](as: IndexedSeq[A])(f: A => B)(mb: Monoid[B]): B =
+    foldLeft(as)(mb.zero)((b, a) => mb.op(f(a), b))
+}
+
+object LazyListFoldable extends Foldable[LazyList] {
+  override def foldRight[A, B](as: LazyList[A])(z: B)(f: (A, B) => B): B =
+    foldLeft(as)(z)(flip(f))
+
+  override def foldLeft[A, B](as: LazyList[A])(z: B)(f: (B, A) => B): B = {
+    @tailrec
+    def go(as: LazyList[A], acc: B): B = as match {
+      case as if as.isEmpty => acc
+      case a +: as => go(as, f(acc, a))
+    }
+
+    go(as, z)
+  }
+
+  override def foldMap[A, B](as: LazyList[A])(f: A => B)(mb: Monoid[B]): B =
+    foldLeft(as)(mb.zero)((b, a) => mb.op(f(a), b))
+}
+
+sealed trait Tree[+A]
+
+case class Leaf[A](value: A) extends Tree[A]
+
+case class Branch[A](left: Tree[A], right: Tree[A]) extends Tree[A]
+
+object TreeFoldable extends Foldable[Tree] {
+  override def foldRight[A, B](as: Tree[A])(z: B)(f: (A, B) => B): B =
+    foldLeft(as)(z)(flip(f))
+
+  override def foldLeft[A, B](as: Tree[A])(z: B)(f: (B, A) => B): B = {
+    def go(as: Tree[A], acc: B): B = as match {
+      case Leaf(a) => f(acc, a)
+      case Branch(l, r) => go(l, go(r, acc))
+    }
+
+    go(as, z)
+  }
+
+  override def foldMap[A, B](as: Tree[A])(f: A => B)(mb: Monoid[B]): B =
+    foldLeft(as)(mb.zero)((b, a) => mb.op(f(a), b))
+}
+
+object OptionFoldable extends Foldable[Option] {
+  override def foldRight[A, B](a: Option[A])(z: B)(f: (A, B) => B): B =
+    foldLeft(a)(z)(flip(f))
+
+  override def foldLeft[A, B](a: Option[A])(z: B)(f: (B, A) => B): B =
+    a.fold(z)(a => f(z, a))
+
+  override def foldMap[A, B](a: Option[A])(f: A => B)(mb: Monoid[B]): B =
+    foldLeft(a)(mb.zero)((b, a) => mb.op(f(a), b))
 }
