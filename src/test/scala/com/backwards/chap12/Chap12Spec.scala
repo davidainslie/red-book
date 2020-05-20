@@ -1,8 +1,11 @@
 package com.backwards.chap12
 
+import java.util.Date
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import com.backwards.chap11.Functor
+import java.text._
+import scala.util.Try
 
 /**
  * A large number of the useful combinators on Monad can be defined using only unit and map2.
@@ -38,6 +41,93 @@ class Chap12Spec extends AnyWordSpec with Matchers {
 
     "12.3b map4" in {
 
+    }
+
+    "12.5 monad instance of Either" in {
+      // def eitherMonad[E]: Monad[({ type M[x] = Either[E, x] })#M] = ???
+      def eitherMonad[E]: Monad[E Either *] = new Monad[E Either *] {
+        def unit[A](a: => A): E Either A = Right(a)
+
+        override def flatMap[A, B](ma: E Either A)(f: A => E Either B): E Either B = ma match {
+          case Right(a) => f(a)
+          case Left(e) => Left(e)
+        }
+      }
+
+      eitherMonad.unit(42) mustBe Right(42)
+    }
+
+    // def validationApplicative[E]: Applicative[({ type A[x] = Validation[E, x] })#A] = ???
+    def validationApplicative[E]: Applicative[E Validation *] = new Applicative[E Validation *] {
+      def unit[A](a: => A): E Validation A = Success(a)
+
+      override def map2[A, B, C](fa: E Validation A, fb: E Validation B)(f: (A, B) => C): E Validation C = (fa, fb) match {
+        case (Success(a), Success(b)) => Success(f(a, b))
+        case (Failure(h1, t1), Failure(h2, t2)) => Failure(h1, t1 ++ Vector(h2) ++ t2)
+        case (failure @ Failure(_, _), _) => failure
+        case (_, failure @ Failure(_, _)) => failure
+      }
+    }
+
+    "12.6 applicative instance of Validation" in {
+      val v: Validation[String, Int] = validationApplicative[String].map2[Int, Int, Int](Failure("whoops1"), Failure("whoops2"))(_ + _)
+
+      v mustBe Failure("whoops1", Vector("whoops2"))
+    }
+
+    "Web form example" should {
+      case class WebForm(name: String, birthdate: Date, phoneNumber: String)
+
+      // This data will likely be collected from the user as strings, and we must make sure that the data meets a certain specification.
+      // If it doesn’t, we must give a list of errors to the user indicating how to fix the problem.
+      // The specification might say that name can’t be empty, that birthdate must be in the form "yyyy-MM-dd", and that phoneNumber must contain exactly 10 digits.
+
+      def validName(name: String): String Validation String =
+        if (name != "") Success(name)
+        else Failure("Name cannot be empty")
+
+      def validBirthdate(birthdate: String): String Validation Date =
+        Try {
+          Success(new SimpleDateFormat("yyyy-MM-dd").parse(birthdate))
+        } getOrElse Failure("Birthdate must be in the form yyyy-MM-dd")
+
+      def validPhone(phoneNumber: String): String Validation String =
+        if (phoneNumber.matches("[0-9]{10}")) Success(phoneNumber)
+        else Failure("Phone number must be 10 digits")
+
+      // And to validate an entire web form, we can simply lift the WebForm constructor with map3:
+
+      def validWebForm(name: String, birthdate: String, phone: String): String Validation WebForm =
+        validationApplicative.map3(
+          validName(name),
+          validBirthdate(birthdate),
+          validPhone(phone)
+        )(WebForm)
+    }
+  }
+
+  "Streams are applicative functors but not monads" should {
+    val lazyListApplicative = new Applicative[LazyList] {
+      def unit[A](a: => A): LazyList[A] =
+        LazyList.continually(a)
+
+      override def map2[A, B, C](fa: LazyList[A], fb: LazyList[B])(f: (A, B) => C): LazyList[C] =
+        fa zip fb map f.tupled
+
+      override def sequence[A](fas: List[LazyList[A]]): LazyList[List[A]] =
+        fas.foldLeft(unit(List.empty[A])) { (acc, l) =>
+          acc #::: l.map(List(_))
+        }
+    }
+
+    "unit" in {
+      lazyListApplicative.unit(42).take(3).toList mustBe List(42, 42, 42)
+    }
+
+    "map2" in {
+      val xs: LazyList[Int] = lazyListApplicative.map2(LazyList(1, 2), LazyList(5, 6))(_ + _)
+
+      xs.toList mustBe List(6, 8)
     }
   }
 }
@@ -137,3 +227,9 @@ trait Monad[F[_]] extends Applicative[F] {
   def join[A](mma: F[F[A]]): F[A] =
     flatMap(mma)(ma => ma)
 }
+
+sealed trait Validation[+E, +A]
+
+case class Failure[E](head: E, tail: Vector[E] = Vector()) extends Validation[E, Nothing]
+
+case class Success[A](a: A) extends Validation[Nothing, A]
