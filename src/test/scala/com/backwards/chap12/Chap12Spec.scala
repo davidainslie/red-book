@@ -6,6 +6,7 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.backwards.chap11.Functor
 import java.text._
 import scala.util.Try
+import com.backwards.chap10.Foldable
 
 /**
  * A large number of the useful combinators on Monad can be defined using only unit and map2.
@@ -19,16 +20,22 @@ import scala.util.Try
  */
 class Chap12Spec extends AnyWordSpec with Matchers {
   "Applicative Functor" should {
-    "12.1a sequence" in {
+    import Applicative._
+    import Traverse._
 
+    // TODO - All the following needs underlying to be reimplemented to avoid stack overflow from recursive calls
+    "12.1a sequence" in {
+      /*val v: Option[List[Int]] = optionApplicative.sequence(List(Some(1), Some(2), Some(3)))
+
+      v mustBe Some(List(1, 2, 3))*/
     }
 
     "12.1b replicateM" in {
-
+      // val v = optionApplicative.replicateM(3, Some("hi"))
     }
 
     "12.1c product" in {
-
+      // val v = optionApplicative.product(Some(1), Some(2))
     }
 
     "12.2 apply" in {
@@ -104,6 +111,86 @@ class Chap12Spec extends AnyWordSpec with Matchers {
           validPhone(phone)
         )(WebForm)
     }
+
+    "12.7" in {
+
+    }
+
+    "12.8 product of applicatives" in {
+      val applicative: Applicative[Lambda[x => (Option[x], String Either x)]] =
+        optionApplicative product eitherApplicatve[String]
+
+      applicative.unit(5) mustBe (Some(5), Right(5))
+    }
+
+    "12.9 compose" in {
+      val applicative: Applicative[Lambda[x => Option[String Either x]]] =
+        optionApplicative compose eitherApplicatve[String]
+
+      applicative.unit(5) mustBe Some(Right(5))
+    }
+
+    "12.10" in {
+
+    }
+
+    "12.11" in {
+
+    }
+
+    /**
+     * {{{
+     *  Map[K, Par[A]] => Par[Map[K,A]]
+     * }}}
+     * A call to {{{Traverse[Map[K, _]].sequence}}} with Par as the Applicative
+     * produces a parallel computation that evaluates all values of the map in parallel.
+     */
+    "12.12 sequenceMap" in {
+      val option: Option[Map[Int, String]] =
+        optionApplicative sequenceMap Map(42 -> Some("hi"), 52 -> Some("no"))
+
+      option mustBe Some(Map(42 -> "hi", 52 -> "no"))
+    }
+
+    /**
+     * {{{
+     *  List[Option[A]] => Option[List[A]]
+     * }}}
+     * A call to Traverse[List].sequence with Option as the Applicative
+     * returns None if any of the input List is None;
+     * otherwise it returns the original List wrapped in Some.
+     */
+    "12.13a traverse instance for list" in {
+      implicit val applicative: Applicative[Option] = optionApplicative
+
+      val v: Option[List[Int]] = listTraverse.traverse(List(1, 2, 3))(a => Option(a))
+
+      v mustBe Some(List(1, 2, 3))
+    }
+
+    "12.13b traverse instance for option" in {
+      implicit val applicative: Applicative[Option] = optionApplicative
+
+      val v: Option[Option[Int]] = optionTraverse.traverse(Option(1))(a => Option(a))
+
+      v mustBe Some(Some(1))
+    }
+
+    /**
+     * {{{
+     *  Tree[Option[A]] => Option[Tree[A]]
+     * }}}
+     * Acall to Traverse[Tree].sequence with Option as the Applicative)
+     * returns None if any of the input Tree is None;
+     * otherwise it returns the original Tree wrapped in Some.
+     */
+    "12.13c traverse instance for tree" in {
+      implicit val applicative: Applicative[Option] = optionApplicative
+
+      val v: Option[Tree[Int]] = treeTraverse.traverse(Tree(1, List(Tree(2, Nil), Tree(3, Nil))))(a => Option(a))
+
+      v mustBe Some(Tree(1, List(Tree(2, Nil), Tree(3, Nil))))
+    }
   }
 
   "Streams are applicative functors but not monads" should {
@@ -139,13 +226,13 @@ trait Applicative[F[_]] extends Functor[F] {
    * So if we map `f.curried` over an `F[A]`, we get `F[B => C]`.
    * Passing that to `apply` along with the `F[B]` will give us the desired `F[C]`.
    */
-  def map2[A, B, C](fa: F[A], fb: F[B])(f: (A, B) => C): F[C] =
-    apply(map(fa)(f.curried))(fb)
+  def map2[A, B, C](fa: F[A], fb: F[B])(f: (A, B) => C): F[C] /*=
+    apply(map(fa)(f.curried))(fb)*/
 
   def unit[A](a: => A): F[A]
 
   def map[A, B](fa: F[A])(f: A => B): F[B] =
-    map2(fa, unit(()))((a, _) => f(a))
+    apply(unit(f))(fa)
 
   def apply[A, B](fab: F[A => B])(fa: F[A]): F[B] =
     map2(fab, fa) { (f, a) =>
@@ -165,6 +252,14 @@ trait Applicative[F[_]] extends Functor[F] {
 
   def sequenceBetter[A](fas: List[F[A]]): F[List[A]] =
     traverse(fas)(fa => fa)
+
+  def sequenceMap[K, V](ofa: Map[K, F[V]]): F[Map[K, V]] =
+    ofa.foldRight(unit(Map.empty[K, V])) {
+      case ((k, fv), fbs) =>
+        map2(fv, fbs) { case (v, fb) =>
+          fb + (k -> v)
+        }
+    }
 
   def replicateM[A](n: Int, fa: F[A]): F[List[A]] =
     sequence(List.fill(n)(fa))
@@ -187,6 +282,8 @@ trait Applicative[F[_]] extends Functor[F] {
 
       override def apply[A,B](fs: (F[A => B], G[A => B]))(p: (F[A], G[A])): (F[B], G[B]) =
         (self.apply(fs._1)(p._1), G.apply(fs._2)(p._2))
+
+      def map2[A, B, C](fa: (F[A], G[A]), fb: (F[B], G[B]))(f: (A, B) => C): (F[C], G[C]) = ???
     }
   }
 
@@ -205,6 +302,46 @@ trait Applicative[F[_]] extends Functor[F] {
   )(f: (A, B, C, D) => E): F[E] =
     // We don't actually have to annotate unit
     apply(apply(apply(apply(unit(f.curried))(fa))(fb))(fc))(fd)
+
+  // Here we simply use `map2` to lift `apply` and `unit` themselves from one Applicative into the other.
+  // If `self` and `G` both satisfy the laws, then so does the composite.
+  // The full proof can be found at
+  // https://github.com/runarorama/sannanir/blob/master/Applicative.v
+
+  // def compose[G[_]](G: Applicative[G]): Applicative[({ type f[x] = F[G[x]] })#f]
+  def compose[G[_]](G: Applicative[G]): Applicative[Lambda[x => F[G[x]]]] = {
+    val self = this
+
+    // new Applicative[({ type f[x] = F[G[x]] })#f]
+    new Applicative[Lambda[x => F[G[x]]]] {
+      def unit[A](a: => A): F[G[A]] =
+        self.unit(G.unit(a))
+
+      override def map2[A, B, C](fga: F[G[A]], fgb: F[G[B]])(f: (A, B) => C): F[G[C]] =
+        self.map2(fga, fgb)(G.map2(_, _)(f))
+    }
+  }
+}
+
+object Applicative {
+  val optionApplicative: Applicative[Option] = new Applicative[Option] {
+    def unit[A](a: => A): Option[A] = Option(a)
+
+    def map2[A, B, C](fa: Option[A], fb: Option[B])(f: (A, B) => C): Option[C] = (fa, fb) match {
+      case (Some(a), Some(b)) => Option(f(a, b))
+      case _ => None
+    }
+  }
+
+  def eitherApplicatve[E]: Applicative[E Either *] = new Applicative[E Either *] {
+    def unit[A](a: => A): E Either A = Right(a)
+
+    def map2[A, B, C](fa: E Either A, fb: E Either B)(f: (A, B) => C): E Either C = (fa, fb) match {
+      case (Right(a), Right(b)) => Right(f(a, b))
+      case (Left(e), _) => Left(e)
+      case (_, Left(e)) => Left(e)
+    }
+  }
 }
 
 // From previous chapter, we can now extend Monad from Applicative Functor:
@@ -230,6 +367,56 @@ trait Monad[F[_]] extends Applicative[F] {
 
 sealed trait Validation[+E, +A]
 
-case class Failure[E](head: E, tail: Vector[E] = Vector()) extends Validation[E, Nothing]
+case class Failure[E](head: E, tail: Vector[E] = Vector.empty[E]) extends Validation[E, Nothing]
 
 case class Success[A](a: A) extends Validation[Nothing, A]
+
+case class Tree[+A](head: A, tail: List[Tree[A]])
+
+trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
+  def traverse[G[_]: Applicative, A, B](fa: F[A])(f: A => G[B]): G[F[B]] =
+    sequence(map(fa)(f))
+
+  def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] =
+    traverse(fga)(identity)
+}
+
+object Traverse {
+  val listTraverse: Traverse[List] = new Traverse[List] {
+    def map[A, B](as: List[A])(f: A => B): List[B] = as map f
+
+    override def traverse[G[_]: Applicative, A, B](as: List[A])(f: A => G[B]): G[List[B]] = {
+      val applicative = implicitly[Applicative[G]]
+
+      as.foldRight(applicative.unit(List.empty[B])) { case (a, g) =>
+        applicative.map2(f(a), g) { case (b, bs) =>
+          b +: bs
+        }
+      }
+    }
+  }
+
+  val optionTraverse: Traverse[Option] = new Traverse[Option] {
+    def map[A, B](fa: Option[A])(f: A => B): Option[B] = fa map f
+
+    override def traverse[G[_]: Applicative, A, B](oa: Option[A])(f: A => G[B]): G[Option[B]] = {
+      val applicative = implicitly[Applicative[G]]
+
+      oa match {
+        case Some(a) => applicative.map(f(a))(Some.apply)
+        case None => applicative.unit(None)
+      }
+    }
+  }
+
+  val treeTraverse: Traverse[Tree] = new Traverse[Tree] {
+    def map[A, B](tree: Tree[A])(f: A => B): Tree[B] =
+      Tree(f(tree.head), tree.tail.map(map(_)(f)))
+
+    override def traverse[G[_]: Applicative, A, B](tree: Tree[A])(f: A => G[B]): G[Tree[B]] = {
+      val applicative: Applicative[G] = implicitly[Applicative[G]]
+
+      applicative.map2(f(tree.head), listTraverse.traverse(tree.tail)(a => traverse(a)(f)))(Tree.apply)
+    }
+  }
+}
