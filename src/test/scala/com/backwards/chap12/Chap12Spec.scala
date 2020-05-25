@@ -6,7 +6,7 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.backwards.chap11.Functor
 import java.text._
 import scala.util.Try
-import com.backwards.chap10.Foldable
+import com.backwards.chap10.{Foldable, Monoid}
 
 /**
  * A large number of the useful combinators on Monad can be defined using only unit and map2.
@@ -25,29 +25,39 @@ class Chap12Spec extends AnyWordSpec with Matchers {
 
     // TODO - All the following needs underlying to be reimplemented to avoid stack overflow from recursive calls
     "12.1a sequence" in {
-      /*val v: Option[List[Int]] = optionApplicative.sequence(List(Some(1), Some(2), Some(3)))
+      val v: Option[List[Int]] = optionApplicative.sequence(List(Some(1), Some(2), Some(3)))
 
-      v mustBe Some(List(1, 2, 3))*/
+      v mustBe Some(List(1, 2, 3))
     }
 
     "12.1b replicateM" in {
-      // val v = optionApplicative.replicateM(3, Some("hi"))
+      val v: Option[List[String]] = optionApplicative.replicateM(3, Some("hi"))
+
+      v mustBe Some(List("hi", "hi", "hi"))
     }
 
     "12.1c product" in {
-      // val v = optionApplicative.product(Some(1), Some(2))
+      val v: Option[(Int, Int)] = optionApplicative.product(Some(1), Some(2))
+
+      v mustBe Some(1 -> 2)
     }
 
     "12.2 apply" in {
+      val v: Option[String] = optionApplicative.apply(Option((i: Int) => i.toString))(Option(42))
 
+      v mustBe Some("42")
     }
 
     "12.3a map3" in {
+      val v: Option[Int] = optionApplicative.map3(Option(1), Option(2), Option(3))(_ + _ + _)
 
+      v mustBe Some(6)
     }
 
     "12.3b map4" in {
+      val v: Option[Int] = optionApplicative.map4(Option(1), Option(2), None: Option[Int], Option(3))(_ + _ + _ + _)
 
+      v mustBe None
     }
 
     "12.5 monad instance of Either" in {
@@ -191,6 +201,16 @@ class Chap12Spec extends AnyWordSpec with Matchers {
 
       v mustBe Some(Tree(1, List(Tree(2, Nil), Tree(3, Nil))))
     }
+
+    "12.14 traverse function is a generalisation of map" in {
+      val v: Option[String] = optionTraverse.map(Option(42))(i => i.toString)
+
+      v mustBe Option("42")
+    }
+
+    "12.15" in {
+      // TODO - This is where I got lost
+    }
   }
 
   "Streams are applicative functors but not monads" should {
@@ -246,7 +266,7 @@ trait Applicative[F[_]] extends Functor[F] {
   def sequence[A](fas: List[F[A]]): F[List[A]] =
     fas.foldRight(unit(List.empty[A])) { (fa, acc) =>
       map2(fa, acc) { (a, listOfA) =>
-        listOfA :+ a
+        a +: listOfA
       }
     }
 
@@ -379,11 +399,41 @@ trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
 
   def sequence[G[_]: Applicative, A](fga: F[G[A]]): G[F[A]] =
     traverse(fga)(identity)
+
+  def map[A, B](fa: F[A])(f: A => B): F[B] = ???
+
+  // traverse is more general than map.
+  // traverse can also express foldMap and by extension foldLeft and foldRight!
+
+  // Suppose that our G were a type constructor ConstInt that takes any type to Int, so that
+  // ConstInt[A] throws away its type argument A and just gives us Int:
+  // type ConstInt[A] = Int
+  // Then in the type signature for traverse, if we instantiate G to be ConstInt, it becomes
+  // def traverse[A, B](fa: F[A])(f: A => Int): Int
+  // This looks a lot like foldMap from Foldable.
+  // Indeed, if F is something like List, then what we need to implement this signature is a way of combining the Int values returned by f for each element of the list,
+  // and a “starting” value for handling the empty list. In other words, we only need a Monoid[Int]
+
+  // Turning a Monoid into an Applicative:
+  type Const[M, B] = M
+
+  // implicit def monoidApplicative[M](M: Monoid[M]): Applicative[({ type f[x] = Const[M, x] })#f] = new Applicative[({ type f[x] = Const[M, x] })#f] {
+  implicit def monoidApplicative[M](M: Monoid[M]): Applicative[Const[M, *]] =
+    new Applicative[Const[M, *]] {
+      def unit[A](a: => A): M = M.zero
+
+      def map2[A, B, C](m1: M, m2: M)(f: (A, B) => C): M = M.op(m1,m2)
+    }
+
+  // This means that Traverse can extend Foldable and we can give a default implemen- tation of foldMap in terms of traverse:
+  // override def foldMap[A, M](as: F[A])(f: A => M)(mb: Monoid[M]): M = traverse[({ type f[x] = Const[M,x] })#f, A, Nothing](as)(f)(monoidApplicative(mb))
+  override def foldMap[A, M](as: F[A])(f: A => M)(mb: Monoid[M]): M =
+    traverse[Const[M, *], A, Nothing](as)(f)(monoidApplicative(mb))
 }
 
 object Traverse {
   val listTraverse: Traverse[List] = new Traverse[List] {
-    def map[A, B](as: List[A])(f: A => B): List[B] = as map f
+    override def map[A, B](as: List[A])(f: A => B): List[B] = as map f
 
     override def traverse[G[_]: Applicative, A, B](as: List[A])(f: A => G[B]): G[List[B]] = {
       val applicative = implicitly[Applicative[G]]
@@ -397,7 +447,18 @@ object Traverse {
   }
 
   val optionTraverse: Traverse[Option] = new Traverse[Option] {
-    def map[A, B](fa: Option[A])(f: A => B): Option[B] = fa map f
+    // Original and simplest implementation
+    // override def map[A, B](fa: Option[A])(f: A => B): Option[B] = fa map f
+
+    // Implemented in terms of traverse for exercise 12.14
+    override def map[A, B](fa: Option[A])(f: A => B): Option[B] = {
+      implicit val optionApplicative: Applicative[Option] = Applicative.optionApplicative
+
+      traverse(fa)(a => optionApplicative.unit(f(a))) match {
+        case Some(r) => r
+        case _ => None
+      }
+    }
 
     override def traverse[G[_]: Applicative, A, B](oa: Option[A])(f: A => G[B]): G[Option[B]] = {
       val applicative = implicitly[Applicative[G]]
@@ -410,7 +471,7 @@ object Traverse {
   }
 
   val treeTraverse: Traverse[Tree] = new Traverse[Tree] {
-    def map[A, B](tree: Tree[A])(f: A => B): Tree[B] =
+    override def map[A, B](tree: Tree[A])(f: A => B): Tree[B] =
       Tree(f(tree.head), tree.tail.map(map(_)(f)))
 
     override def traverse[G[_]: Applicative, A, B](tree: Tree[A])(f: A => G[B]): G[Tree[B]] = {
