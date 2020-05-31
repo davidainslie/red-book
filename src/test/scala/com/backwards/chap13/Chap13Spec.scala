@@ -313,21 +313,20 @@ trait IOVersion5 {
    * It now returns a Par[A] rather than an A, and we rely on a separate tail-recursive step function to reassociate the FlatMap constructors:
    */
   @tailrec
-  def step[A](async: Async[A]): Async[A] = async match {
+  final def step[A](async: Async[A]): Async[A] = async match {
     case FlatMap(FlatMap(x, f), g) =>
       step(x flatMap (a => f(a) flatMap g))
 
     case FlatMap(Return(x), f) =>
       step(f(x))
 
-    case _ =>
-      async
+    case _ => async
   }
 
   def run[A](async: Async[A]): Par[A] = step(async) match {
     case Return(a) => Par.unit(a)
 
-    case Suspend(r) => Par.flatMap(r)(a => run(a))
+    case Suspend(r) => Par.flatMap(r)(a => run(Return(a)))
 
     case FlatMap(x, f) => x match {
       case Suspend(r) =>
@@ -395,7 +394,7 @@ trait IOVersion6 {
    * A specialized tail-recursive interpreter, runTrampoline, for running a Free[Function0, A]
    */
   @tailrec
-  def runTrampoline[A](a: Free[Function0, A]): A = a match {
+  final def runTrampoline[A](a: Free[Function0, A]): A = a match {
     case Return(a) => a
 
     case Suspend(r) => r()
@@ -424,7 +423,7 @@ trait IOVersion6 {
   }
 
   @tailrec
-  def step[F[_], A](a: Free[F, A]): Free[F, A] = a match {
+  final def step[F[_], A](a: Free[F, A]): Free[F, A] = a match {
     case FlatMap(FlatMap(x, f), g) =>
       step(x flatMap (a => f(a) flatMap g))
 
