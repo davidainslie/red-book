@@ -300,6 +300,9 @@ trait Monad[F[_]] extends Functor[F] {
 
   def join[A](mma: F[F[A]]): F[A] =
     flatMap(mma)(identity)
+
+  implicit def toMonadic[A](a: F[A]): Monadic[F,A] =
+    new Monadic[F,A] { val F = Monad.this; def get = a }
 }
 
 object Monad {

@@ -1,5 +1,7 @@
 package com.backwards.chap15
 
+import java.io.File
+import scala.annotation.tailrec
 import cats.effect.IO
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -94,34 +96,132 @@ class Chap15Spec extends AnyWordSpec with Matchers {
     }
 
     "15.1a take" in new Version1 {
+      import Process._
 
+      val process: Process[Int, Int] = take[Int](2)
+
+      process(LazyList(1, 2, 3, 4)).toList mustBe List(1, 2)
     }
 
     "15.1b drop" in new Version1 {
+      import Process._
 
+      val process: Process[Int, Int] = drop[Int](1)
+
+      process(LazyList(1, 2, 3, 4)).toList mustBe List(2, 3, 4)
     }
 
     "15.1c takeWhile" in new Version1 {
+      import Process._
 
+      val process: Process[Int, Int] = takeWhile[Int](_ < 4)
+
+      process(LazyList(1, 2, 3, 4)).toList mustBe List(1, 2, 3)
     }
 
     "15.1d dropWhile" in new Version1 {
+      import Process._
 
+      val process: Process[Int, Int] = dropWhile[Int](_ < 3)
+
+      process(LazyList(1, 2, 3, 4)).toList mustBe List(3, 4)
     }
 
     "15.2 count" in new Version1 {
+      import Process._
 
+      val process: Process[Int, Int] = count[Int]
+
+      process(LazyList(1, 2, 3, 4)).last mustBe 4
     }
 
     "15.3 mean" in new Version1 {
+      import Process._
 
+      val process: Process[Double, Double] = mean
+
+      process(LazyList(1, 2, 3, 4)).toList mustBe List(1.0, 1.5, 2.0, 2.5)
+      process(LazyList(1, 2, 3, 4)).last mustBe 2.5
     }
 
     "15.4a sum using loop" in new Version1 {
+      import Process._
 
+      val s: List[Double] = sumUsingLoop(LazyList(1.0, 2.0, 3.0, 4.0)).toList
+
+      s mustBe List(1.0, 3.0, 6.0, 10.0)
     }
 
     "15.4b count using loop" in new Version1 {
+      import Process._
+
+      val process: Process[Int, Int] = countUsingLoop[Int]
+
+      process(LazyList(1, 2, 3, 4)).last mustBe 4
+    }
+
+    "15.5 pipe" in new Version1 {
+      import Process._
+
+      val p1: Process[Double, Double] = sum
+
+      val p2: Process[Double, Double] = sum
+
+      val p: Process[Double, Double] = p1 |> p2
+
+      p(LazyList(1.0, 2.0, 3.0, 4.0)).last mustBe 20.0
+
+      // To filter and map with a single transformation:
+      (filter[Int](_ % 2 == 0) |> lift(_ + 1))(LazyList(1, 2, 3, 4)).toList mustBe List(3, 5)
+    }
+
+    "15.6 zipWithIndex" in new Version1 {
+      import Process._
+    }
+
+    "15.7 mean in terms of a combinator using sum and count" in new Version1 {
+      import Process._
+    }
+
+    "15.8 exists" in new Version1 {
+      import Process._
+    }
+
+    "15.9 toCelsius" in new Version1 {
+      import Process._
+    }
+  }
+
+  "Back to counting line numbers but now with monadic streams" should {
+    "boil down the counting example to: count |> exists(_ > 40000)" in new Version1 {
+      import Process._
+
+      def processFile[A, B](
+        file: File,
+        process: Process[String, A],
+        z: B
+      )(g: (B, A) => B): IO[B] = IO {
+        @tailrec
+        def go(ss: Iterator[String], cur: Process[String, A], acc: B): B =
+          cur match {
+            case Halt() =>
+              acc
+
+            case Await(recv) =>
+              val next = if (ss.hasNext) recv(Some(ss.next)) else recv(None)
+              go(ss, next, acc)
+
+            case Emit(h, t) =>
+              go(ss, t, g(acc, h))
+          }
+
+        val s = Source.fromFile(file)
+
+        try go(s.getLines, process, z) finally s.close
+      }
+
+      // We can now solve the original problem with the following:
+      processFile(new File("build.sbt"), count |> exists(_ > 40000), false)(_ || _)
 
     }
   }
@@ -135,34 +235,87 @@ trait Version1 {
    * A Process can be in one of three states, each of which signals something to the driver.
    */
   sealed trait Process[I, O] {
+    import Process._
+
     def apply(s: LazyList[I]): LazyList[O] = this match {
       case Halt() =>
+        println(s"Apply halt")
         LazyList()
 
       case Await(recv) => s match {
         case h #:: t =>
+          println(s"Apply await: head = $h, tail = $t")
           recv(Some(h))(t)
         case xs =>
+          println(s"Apply empty stream")
           recv(None)(xs) // Stream is empty
       }
 
       case Emit(h, t) =>
+        println(s"Apply emit: head = $h, tail = $t")
         h #:: t(s)
     }
 
     def repeat: Process[I, O] = {
       def go(p: Process[I, O]): Process[I, O] = p match {
-        case Halt() => go(this) // Restart the process if it halts on its own.
+        case Halt() =>
+          println(s"Repeat halt -> restart $this")
+          go(this) // Restart the process if it halts on its own.
 
-        case Await(recv) => Await {
-          case None => recv(None) // Don’t repeat if terminated from source.
-          case i => go(recv(i))
-        }
+        case Await(recv) =>
+          println(s"Repeat: await with recv = $recv")
+          Await {
+            case None =>
+              println(s"Repeat applying await to NOT repeat")
+              recv(None) // Don’t repeat if terminated from source.
+            case i =>
+              println(s"Repeat applying await for $i to go again with recv evaluated to ${recv(i)}")
+              go(recv(i))
+          }
 
-        case Emit(h, t) => Emit(h, go(t))
+        case Emit(h, t) =>
+          println(s"Repeat emit: head = $h, tail = $t, and applying go to tail")
+          Emit(h, go(t))
       }
 
       go(this)
+    }
+
+    def |>[O2](p2: Process[O, O2]): Process[I, O2] = p2 match {
+      case Halt() =>
+        Halt()
+
+      case Emit(h, t) =>
+        Emit(h, this |> t)
+
+      case Await(f) => this match {
+        case Emit(h, t) =>
+          t |> f(Some(h))
+
+        case Halt() =>
+          Halt() |> f(None)
+
+        case Await(g) =>
+          Await((i: Option[I]) => g(i) |> p2)
+      }
+    }
+
+    // This means that the type constructor Process[I, _] is a functor.
+    // If we ignore the input side I for a moment, we can just think of a Process[I, O] as a sequence of O values.
+    // This implementation of map is then analogous to mapping over a Stream or a List.
+    def map[O2](f: O => O2): Process[I,O2] =
+      this |> lift(f)
+
+    def ++(p: => Process[I, O]): Process[I, O] = this match {
+      case Halt() => p
+      case Emit(h, t) => Emit(h, t ++ p)
+      case Await(recv) => Await(recv andThen (_ ++ p))
+    }
+
+    def flatMap[O2](f: O => Process[I, O2]): Process[I, O2] = this match {
+      case Halt() => Halt()
+      case Emit(h, t) => f(h) ++ t.flatMap(f)
+      case Await(recv) => Await(recv andThen (_ flatMap f))
     }
   }
 
@@ -183,8 +336,26 @@ trait Version1 {
   case class Halt[I, O]() extends Process[I, O]
 
   object Process {
-    def emit[I, O](head: O, tail: Process[I, O] = Halt[I, O]()): Process[I, O] =
+    // def monad[I]: Monad[({ type f[x] = Process[I,x] })#f]
+    def monad[I]: Monad[Process[I, *]] =
+      // new Monad[({ type f[x] = Process[I,x] })#f]
+      new Monad[Process[I, *]] {
+        def unit[O](o: => O): Process[I, O] =
+          emit(o)
+
+        def flatMap[O, O2](p: Process[I, O])(f: O => Process[I, O2]): Process[I, O2] =
+          p flatMap f
+      }
+
+    // Enable monadic syntax for `Process` type
+    implicit def toMonadic[I, O](a: Process[I, O]): Monadic[Process[I, *], O] =
+      monad[I].toMonadic(a)
+
+
+    def emit[I, O](head: O, tail: Process[I, O] = Halt[I, O]()): Process[I, O] = {
+      println(s"New emit: head = $head, tail = $tail")
       Emit(head, tail)
+    }
 
     /**
      * A helper function to await an element or fall back to another process if there is no input.
@@ -207,25 +378,82 @@ trait Version1 {
     // We can lift any function to a Process that maps over a Stream:
     def lift[I, O](f: I => O): Process[I, O] = liftOne(f).repeat
 
-    // Here’s a Process that filters out elements that don’t match the predicate p:
-    def filter[I](p: I => Boolean): Process[I, I] = Await[I, I] {
-      case Some(i) if p(i) => emit(i)
-      case _ => Halt()
-    }.repeat
-
-    def sum: Process[Double, Double] = {
-      def go(acc: Double): Process[Double, Double] =
-        Await {
-          case Some(d) => Emit(d+acc, go(d+acc))
-          case None => Halt()
-        }
-
-      go(0.0)
-    }
+    // The identity `Process`, just repeatedly echos its input.
+    def id[I]: Process[I,I] = lift(identity)
 
     def loop[S, I, O](z: S)(f: (I, S) => (O, S)): Process[I, O] =
       await((i: I) => f(i, z) match {
         case (o, s2) => emit(o, loop(s2)(f))
       })
+
+    // Here’s a Process that filters out elements that don’t match the predicate p:
+    def filter[I](p: I => Boolean): Process[I, I] = Await[I, I] {
+      case Some(i) if p(i) =>
+        println(s"Filter: $i")
+        emit(i)
+      case _ =>
+        println("Filter halt")
+        Halt()
+    }.repeat
+
+    def sum: Process[Double, Double] = {
+      def go(acc: Double): Process[Double, Double] = Await {
+        case Some(d) => Emit(d + acc, go(d + acc))
+        case None => Halt()
+      }
+
+      go(0.0)
+    }
+
+    def sumUsingLoop: Process[Double, Double] =
+      loop(0.0)((d: Double, acc) => (acc + d, acc + d))
+
+    def take[I](n: Int): Process[I, I] =
+      if (n <= 0) Halt()
+      else await(i => emit(i, take(n - 1)))
+
+    def takeWhile[I](f: I => Boolean): Process[I, I] =
+      await { i =>
+        if (f(i)) emit(i, takeWhile(f))
+        else Halt()
+      }
+
+    def drop[I](n: Int): Process[I, I] =
+      if (n <= 0) id
+      else await(_ => drop(n - 1))
+
+    def dropWhile[I](f: I => Boolean): Process[I, I] =
+      await { i =>
+        if (f(i)) dropWhile(f)
+        else emit(i, id)
+      }
+
+    /*
+     * Here's one implementation, with three stages.
+     * We map all inputs to 1.0, compute a running sum, then finally convert the output back to `Int`.
+     * The three stages will be interleaved - as soon as the first element is examined, it will be converted to 1.0,
+     * then added to the running total, and then this running total will be converted back to `Int`,
+     * then the `Process` will examine the next element, and so on.
+     */
+    def count[I]: Process[I, Int] =
+      lift((i: I) => 1.0) |> sum |> lift(_.toInt)
+
+    /* For comparison, here is an explicit recursive implementation. */
+    def count2[I]: Process[I, Int] = {
+      def go(n: Int): Process[I, Int] =
+        await((i: I) => emit(n + 1, go(n + 1)))
+
+      go(0)
+    }
+
+    def countUsingLoop[I]: Process[I, Int] =
+      loop(0)((_: I, n) => (n + 1, n + 1))
+
+    def mean: Process[Double, Double] = {
+      def go(sum: Double, count: Double): Process[Double, Double] =
+        await((d: Double) => emit((sum + d) / (count + 1), go(sum + d, count + 1)))
+
+      go(0.0, 0.0)
+    }
   }
 }
